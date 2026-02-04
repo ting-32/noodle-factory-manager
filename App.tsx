@@ -8,6 +8,8 @@ import {
   Settings,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   Search,
   Clock,
   X,
@@ -24,12 +26,28 @@ import {
   WifiOff,
   AlertCircle,
   MessageSquare,
-  CheckCircle2
+  CheckCircle2,
+  Zap
 } from 'lucide-react';
 import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem } from './types';
 import { COLORS, WEEKDAYS, GAS_URL } from './constants';
 
 // --- 工具函數 ---
+const normalizeDate = (dateStr: any) => {
+  if (!dateStr) return '';
+  try {
+    // 嘗試解析日期，處理 yyyy/mm/dd 或 yyyy-mm-dd 或 ISO
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return String(dateStr);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  } catch (e) {
+    return String(dateStr);
+  }
+};
+
 const formatDateStr = (date: Date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -256,10 +274,26 @@ const App: React.FC = () => {
   
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [selectedDate, setSelectedDate] = useState<string>(getTomorrowDate());
+  
+  // 修改：從 localStorage 讀取日期，若無則預設明天。解決刷新後日期重置的問題。
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('nm_selected_date');
+      if (saved) return saved;
+    }
+    return getTomorrowDate();
+  });
+
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
   const [holidayEditorId, setHolidayEditorId] = useState<string | null>(null);
+
+  // 訂單摺疊狀態: 儲存展開的客戶名稱
+  const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
+  
+  // 快速追加狀態
+  const [quickAddData, setQuickAddData] = useState<{customerName: string, productId: string, quantity: number} | null>(null);
 
   const [orderForm, setOrderForm] = useState<{
     customerType: 'existing' | 'retail';
@@ -282,6 +316,12 @@ const App: React.FC = () => {
   const [isEditingProduct, setIsEditingProduct] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<Partial<Product>>({});
   const [historySearch, setHistorySearch] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+
+  // 監聽日期變動，寫入 localStorage
+  useEffect(() => {
+    localStorage.setItem('nm_selected_date', selectedDate);
+  }, [selectedDate]);
 
   // ------------------ 雲端資料同步讀取 ------------------
   useEffect(() => {
@@ -320,11 +360,15 @@ const App: React.FC = () => {
           rawOrders.forEach((o: any) => {
             const oid = String(o.訂單ID || o.id);
             if (!orderMap[oid]) {
+              // 強制將所有讀取的日期正規化為 yyyy-mm-dd
+              const rawDate = o.配送日期 || o.deliveryDate;
+              const normalizedDate = normalizeDate(rawDate);
+
               orderMap[oid] = {
                 id: oid,
                 createdAt: o.建立時間 || o.createdAt,
                 customerName: o.客戶名 || o.customerName || '未知客戶',
-                deliveryDate: o.配送日期 || o.deliveryDate,
+                deliveryDate: normalizedDate,
                 deliveryTime: o.配送時間 || o.deliveryTime,
                 items: [],
                 note: o.備註 || o.note || '',
@@ -357,6 +401,18 @@ const App: React.FC = () => {
     return orders.filter(o => o.deliveryDate === selectedDate);
   }, [orders, selectedDate]);
 
+  // 新增：將訂單依照客戶分組
+  const groupedOrders = useMemo(() => {
+    const groups: Record<string, Order[]> = {};
+    ordersForDate.forEach(o => {
+      const name = o.customerName;
+      if (!groups[name]) groups[name] = [];
+      groups[name].push(o);
+    });
+    // 排序：有資料的客戶依照最後加入時間排序，或可依照名稱排序
+    return groups;
+  }, [ordersForDate]);
+
   const activeCustomersForDate = useMemo(() => {
     const dayOfWeek = new Date(selectedDate).getDay();
     return customers.filter(c => {
@@ -366,19 +422,39 @@ const App: React.FC = () => {
     });
   }, [customers, selectedDate]);
 
-  const filteredHistory = useMemo(() => {
-    return orders
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => 
+      c.name.toLowerCase().includes(customerSearch.toLowerCase())
+    );
+  }, [customers, customerSearch]);
+
+  // 歷史紀錄：依照日期分組
+  const groupedHistory = useMemo(() => {
+    const filtered = orders
       .filter(o => {
         const search = (historySearch || '').toLowerCase();
         const name = (o.customerName || '').toLowerCase();
         return name.includes(search);
       })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .sort((a, b) => new Date(b.deliveryDate).getTime() - new Date(a.deliveryDate).getTime());
+
+    const groups: Record<string, Order[]> = {};
+    filtered.forEach(o => {
+      const d = o.deliveryDate || '未知日期';
+      if (!groups[d]) groups[d] = [];
+      groups[d].push(o);
+    });
+    return groups;
   }, [orders, historySearch]);
 
   const handleSelectExistingCustomer = (id: string) => {
     const cust = customers.find(c => c.id === id);
     if (cust) {
+      // 檢查是否已存在訂單，若有則跳出提醒
+      if (groupedOrders[cust.name] && groupedOrders[cust.name].length > 0) {
+        alert(`⚠️ 提醒：\n\n「${cust.name}」在今日 (${selectedDate}) 已經建立過訂單了！\n\n若需增加品項，建議回到列表使用「追加訂單」功能，以免重複配送。`);
+      }
+
       setOrderForm({
         ...orderForm,
         customerId: id,
@@ -388,6 +464,7 @@ const App: React.FC = () => {
           ? cust.defaultItems.map(di => ({ ...di })) 
           : [{ productId: '', quantity: 10 }]
       });
+      setIsCustomerDropdownOpen(false);
     }
   };
 
@@ -403,7 +480,7 @@ const App: React.FC = () => {
       id: 'ORD-' + Date.now(),
       createdAt: new Date().toISOString(),
       customerName: finalName,
-      deliveryDate: selectedDate,
+      deliveryDate: selectedDate, // 這裡已經是 yyyy-mm-dd
       deliveryTime: orderForm.deliveryTime,
       items: validItems,
       note: orderForm.note,
@@ -427,6 +504,46 @@ const App: React.FC = () => {
     setIsSaving(false);
     setIsAddingOrder(false);
     setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', items: [{ productId: '', quantity: 10 }], note: '' });
+  };
+
+  // 處理快速追加訂單
+  const handleQuickAddSubmit = async () => {
+    if (!quickAddData || isSaving) return;
+    if (!quickAddData.productId || quickAddData.quantity <= 0) return;
+
+    setIsSaving(true);
+    
+    // 嘗試找出現有訂單來繼承配送時間，若無則預設
+    const existingOrders = groupedOrders[quickAddData.customerName] || [];
+    const baseOrder = existingOrders[0];
+    const deliveryTime = baseOrder ? baseOrder.deliveryTime : '08:00';
+
+    const newOrder: Order = {
+      id: 'Q-ORD-' + Date.now(),
+      createdAt: new Date().toISOString(),
+      customerName: quickAddData.customerName,
+      deliveryDate: selectedDate,
+      deliveryTime: deliveryTime,
+      items: [{ productId: quickAddData.productId, quantity: quickAddData.quantity }],
+      note: '追加單',
+      status: OrderStatus.PENDING
+    };
+
+    try {
+      if (GAS_URL) {
+        const p = products.find(prod => prod.id === quickAddData.productId);
+        const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: quickAddData.quantity }];
+        
+        await fetch(GAS_URL, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } })
+        });
+      }
+    } catch (e) { console.error(e); }
+
+    setOrders([newOrder, ...orders]);
+    setIsSaving(false);
+    setQuickAddData(null); // 關閉快速追加視窗
   };
 
   const handleDeleteOrder = async (orderId: string) => {
@@ -525,31 +642,74 @@ const App: React.FC = () => {
               </button>
               <button onClick={() => setIsAddingOrder(true)} className="w-14 h-14 rounded-[24px] text-white shadow-lg active:scale-95 transition-all flex items-center justify-center" style={{ backgroundColor: COLORS.primary }}><Plus className="w-8 h-8" /></button>
             </div>
-            <div className="space-y-4">
-              <h2 className="text-sm font-bold text-gray-400 px-2 flex items-center gap-2 uppercase tracking-widest"><Layers className="w-4 h-4" /> 今日清單 ({ordersForDate.length})</h2>
-              {ordersForDate.length > 0 ? ordersForDate.map(order => (
-                <div key={order.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-white group relative">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center text-lg font-bold" style={{ color: COLORS.primary }}>{order.customerName.charAt(0)}</div>
-                      <div><h3 className="font-bold text-slate-800">{order.customerName}</h3><div className="flex items-center gap-1 text-[10px] text-gray-400 font-bold uppercase"><Clock className="w-3 h-3" /> {order.deliveryTime}</div></div>
+            
+            <div className="space-y-2">
+              <h2 className="text-sm font-bold text-gray-400 px-2 flex items-center gap-2 uppercase tracking-widest mb-2"><Layers className="w-4 h-4" /> 配送列表 [{selectedDate}] ({Object.keys(groupedOrders).length} 家)</h2>
+              
+              {Object.keys(groupedOrders).length > 0 ? (
+                Object.entries(groupedOrders).map(([custName, custOrders]) => {
+                  const isExpanded = expandedCustomer === custName;
+                  const firstOrder = custOrders[0];
+                  
+                  return (
+                    <div key={custName} className="bg-white rounded-[24px] shadow-sm border border-white overflow-hidden transition-all duration-300">
+                      {/* 客戶標題列 (點擊切換) */}
+                      <button 
+                        onClick={() => setExpandedCustomer(isExpanded ? null : custName)}
+                        className="w-full flex items-center justify-between p-5 text-left active:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold transition-colors ${isExpanded ? 'bg-sage-50 text-sage-600' : 'bg-gray-50 text-gray-400'}`} style={{ color: isExpanded ? COLORS.primary : '', backgroundColor: isExpanded ? `${COLORS.primary}20` : '' }}>
+                            {custName.charAt(0)}
+                          </div>
+                          <div>
+                            <h3 className={`font-bold text-lg ${isExpanded ? 'text-slate-800' : 'text-slate-600'}`}>{custName}</h3>
+                            {!isExpanded && (
+                               <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{custOrders.reduce((sum, o) => sum + o.items.length, 0)} 個品項</p>
+                            )}
+                          </div>
+                        </div>
+                        {isExpanded ? <ChevronUp className="w-5 h-5 text-gray-300" /> : <ChevronDown className="w-5 h-5 text-gray-300" />}
+                      </button>
+
+                      {/* 展開內容區塊 */}
+                      {isExpanded && (
+                        <div className="bg-gray-50/50 border-t border-gray-100 p-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                          {custOrders.map((order, orderIdx) => (
+                             <div key={order.id} className="relative group">
+                               {order.items.map((item, itemIdx) => {
+                                 const p = products.find(prod => prod.id === item.productId);
+                                 return (
+                                   <div key={`${order.id}-${itemIdx}`} className="flex justify-between items-center py-2 px-2 border-b border-gray-100 last:border-0 hover:bg-white rounded-lg transition-colors">
+                                     <span className="font-bold text-slate-700">{p?.name || item.productId}</span>
+                                     <div className="flex items-center gap-3">
+                                       <span className="font-black text-xl text-slate-800">{item.quantity}</span>
+                                       <span className="text-xs text-gray-400 font-bold w-4">{p?.unit || '斤'}</span>
+                                     </div>
+                                   </div>
+                                 );
+                               })}
+                               {/* 刪除訂單按鈕 (僅在測試或誤植時使用，這裡做成每個訂單區塊一個小刪除鍵) */}
+                               <div className="flex justify-end mt-1">
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteOrder(order.id); }} className="text-[10px] text-rose-300 hover:text-rose-500 px-2 py-1 flex items-center gap-1"><Trash2 className="w-3 h-3" /> 刪除此單</button>
+                               </div>
+                             </div>
+                          ))}
+                          
+                          {/* 快速追加按鈕 */}
+                          <button 
+                            onClick={() => setQuickAddData({ customerName: custName, productId: '', quantity: 0 })}
+                            className="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-sage-200 text-sage-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-sage-50 transition-colors"
+                            style={{ borderColor: `${COLORS.primary}40`, color: COLORS.primary }}
+                          >
+                            <Plus className="w-4 h-4" /> 追加訂單
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold bg-amber-50 text-amber-500 px-3 py-1 rounded-full border border-amber-100 uppercase">待處理</span>
-                      <button onClick={() => handleDeleteOrder(order.id)} className="p-2 text-rose-200 hover:text-rose-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-                  </div>
-                  <div className="space-y-2 mb-3 bg-gray-50/50 p-4 rounded-2xl">
-                    {order.items.map((item, idx) => {
-                      const p = products.find(prod => prod.id === item.productId);
-                      return <div key={idx} className="flex justify-between items-center text-sm"><span className="font-medium text-slate-600">{p?.name || item.productId}</span><span className="font-black text-slate-800">{item.quantity} {p?.unit || '斤'}</span></div>;
-                    })}
-                  </div>
-                  {order.note && (
-                    <div className="flex items-start gap-2 text-slate-500 text-xs px-2 italic"><MessageSquare className="w-3.5 h-3.5 mt-0.5 text-gray-300" /> {order.note}</div>
-                  )}
-                </div>
-              )) : (
+                  );
+                })
+              ) : (
                 <div className="py-20 flex flex-col items-center text-center gap-4"><ClipboardList className="w-16 h-16 text-gray-200" /><p className="text-gray-300 italic text-sm">此日期尚無訂單</p></div>
               )}
             </div>
@@ -562,7 +722,19 @@ const App: React.FC = () => {
               <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Users className="w-5 h-5" style={{ color: COLORS.primary }} /> 店家管理</h2>
               <button onClick={() => { setCustomerForm({ name: '', phone: '', deliveryTime: '08:00', defaultItems: [], offDays: [], holidayDates: [] }); setIsEditingCustomer('new'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
             </div>
-            {customers.map(c => (
+            
+            <div className="relative mb-2">
+                <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300" />
+                <input 
+                  type="text" 
+                  placeholder="搜尋店家名稱..." 
+                  className="w-full pl-14 pr-6 py-4 bg-white rounded-[24px] border-none shadow-sm text-slate-800 font-bold focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300" 
+                  value={customerSearch} 
+                  onChange={(e) => setCustomerSearch(e.target.value)} 
+                />
+            </div>
+
+            {filteredCustomers.map(c => (
               <div key={c.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex items-center gap-3">
@@ -614,6 +786,10 @@ const App: React.FC = () => {
                 </div>
               </div>
             ))}
+            
+            {filteredCustomers.length === 0 && (
+                 <div className="text-center py-10 text-gray-300 text-sm font-bold">查無店家</div>
+            )}
           </div>
         )}
 
@@ -648,22 +824,31 @@ const App: React.FC = () => {
                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300" />
                 <input type="text" placeholder="搜尋店名或訂單內容..." className="w-full pl-14 pr-6 py-5 bg-white rounded-[28px] border-none shadow-sm text-slate-800 font-bold focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300" value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} />
               </div>
-              <div className="space-y-4">
-                {filteredHistory.map(o => (
-                  <div key={o.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
-                    <div className="flex justify-between items-start mb-2">
-                      <h3 className="font-bold text-slate-800">{o.customerName}</h3>
-                      <span className="text-[10px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-full">{o.deliveryDate}</span>
+              <div className="space-y-6">
+                {Object.keys(groupedHistory).length > 0 ? (
+                  Object.entries(groupedHistory).map(([date, historyOrders]) => (
+                    <div key={date} className="space-y-2">
+                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest px-2">{date}</h3>
+                      {historyOrders.map(o => (
+                        <div key={o.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
+                          <div className="flex justify-between items-start mb-2">
+                            <h3 className="font-bold text-slate-800">{o.customerName}</h3>
+                            <span className="text-[10px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-full">{formatTimeDisplay(o.deliveryTime)}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 mb-2 font-medium">
+                            {o.items.map((item, idx) => {
+                              const p = products.find(prod => prod.id === item.productId || prod.name === item.productId);
+                              return <span key={idx}>{p?.name || item.productId} {item.quantity}{p?.unit || '斤'}{idx < o.items.length - 1 ? '、' : ''}</span>;
+                            })}
+                          </div>
+                          {o.note && <div className="text-[10px] text-slate-400 italic flex items-center gap-1 font-medium"><MessageSquare className="w-3 h-3 text-gray-200" /> {o.note}</div>}
+                        </div>
+                      ))}
                     </div>
-                    <div className="text-[11px] text-slate-500 mb-2 font-medium">
-                      {o.items.map((item, idx) => {
-                        const p = products.find(prod => prod.id === item.productId || prod.name === item.productId);
-                        return <span key={idx}>{p?.name || item.productId} {item.quantity}{p?.unit || '斤'}{idx < o.items.length - 1 ? '、' : ''}</span>;
-                      })}
-                    </div>
-                    {o.note && <div className="text-[10px] text-slate-400 italic flex items-center gap-1 font-medium"><MessageSquare className="w-3 h-3 text-gray-200" /> {o.note}</div>}
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <div className="text-center py-10 text-gray-300 text-sm font-bold">尚無歷史訂單</div>
+                )}
               </div>
             </div>
           </div>
@@ -673,6 +858,48 @@ const App: React.FC = () => {
       {/* --- 彈窗模組 --- */}
       {isDatePickerOpen && <DatePickerModal selectedDate={selectedDate} onSelect={setSelectedDate} onClose={() => setIsDatePickerOpen(false)} />}
       
+      {/* 快速追加訂單彈窗 */}
+      {quickAddData && (
+        <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="bg-white w-full max-w-xs rounded-[32px] overflow-hidden shadow-2xl animate-in zoom-in duration-200">
+              <div className="p-5 bg-gray-50 border-b border-gray-100">
+                <h3 className="text-center font-bold text-gray-800">追加訂單</h3>
+                <p className="text-center text-xs text-gray-400 font-bold">{quickAddData.customerName}</p>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">追加品項</label>
+                   <select 
+                      className="w-full bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none"
+                      value={quickAddData.productId}
+                      onChange={(e) => setQuickAddData({...quickAddData, productId: e.target.value})}
+                   >
+                      <option value="">選擇品項...</option>
+                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                   </select>
+                </div>
+                <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">數量</label>
+                   <div className="flex items-center gap-2">
+                     <button onClick={() => setQuickAddData({...quickAddData, quantity: Math.max(0, quickAddData.quantity - 5)})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">-</button>
+                     <input 
+                        type="number" 
+                        className="flex-1 bg-gray-50 p-4 rounded-xl text-center font-black text-xl text-slate-800 outline-none"
+                        value={quickAddData.quantity}
+                        onChange={(e) => setQuickAddData({...quickAddData, quantity: parseInt(e.target.value) || 0})}
+                     />
+                     <button onClick={() => setQuickAddData({...quickAddData, quantity: quickAddData.quantity + 5})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">+</button>
+                   </div>
+                </div>
+              </div>
+              <div className="p-4 flex gap-2">
+                 <button onClick={() => setQuickAddData(null)} className="flex-1 py-3 rounded-2xl font-bold text-gray-400 hover:bg-gray-50 transition-colors">取消</button>
+                 <button onClick={handleQuickAddSubmit} className="flex-1 py-3 rounded-2xl font-bold text-white shadow-lg transition-all active:scale-95" style={{ backgroundColor: COLORS.primary }}>確認追加</button>
+              </div>
+           </div>
+        </div>
+      )}
+
       {isAddingOrder && (
         <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
           <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10">
@@ -688,10 +915,57 @@ const App: React.FC = () => {
             {orderForm.customerType === 'existing' ? (
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送店家 (今日營業)</label>
-                <select className="w-full p-5 bg-white rounded-[24px] shadow-sm font-bold text-slate-800 border-none appearance-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={orderForm.customerId} onChange={(e) => handleSelectExistingCustomer(e.target.value)}>
-                  <option value="">選擇店家...</option>
-                  {activeCustomersForDate.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                
+                {/* 簡單的下拉式選單設計 */}
+                <div className="relative">
+                  {/* 下拉選單觸發按鈕 */}
+                  <button 
+                    onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
+                    className="w-full p-5 bg-white rounded-[24px] shadow-sm flex justify-between items-center font-bold text-slate-800 focus:ring-2 focus:ring-[#8e9775] transition-all"
+                  >
+                    <span className="flex items-center gap-2">
+                      {orderForm.customerName || "選擇店家..."}
+                      {/* 如果已選店家有單，在選單收合時顯示小圓點提示 */}
+                      {orderForm.customerName && groupedOrders[orderForm.customerName] && (
+                         <span className="bg-amber-400 text-white text-[9px] px-2 py-0.5 rounded-full">已建立</span>
+                      )}
+                    </span>
+                    {isCustomerDropdownOpen ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
+                  </button>
+
+                  {/* 展開的選項列表 */}
+                  {isCustomerDropdownOpen && (
+                    <div className="mt-2 bg-white rounded-[24px] shadow-lg border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                      <div className="max-h-60 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                        {activeCustomersForDate.map(c => {
+                           const hasOrder = !!groupedOrders[c.name];
+                           const isSelected = orderForm.customerId === c.id;
+                           return (
+                             <button
+                               key={c.id}
+                               onClick={() => handleSelectExistingCustomer(c.id)}
+                               className={`w-full p-4 rounded-[20px] text-xs font-bold text-left flex justify-between items-center transition-all
+                                 ${isSelected 
+                                   ? 'bg-sage-600 text-white' 
+                                   : hasOrder 
+                                     ? 'bg-amber-50 text-amber-700 border border-amber-100' 
+                                     : 'hover:bg-gray-50 text-slate-600'
+                                 }
+                               `}
+                               style={{ backgroundColor: isSelected ? COLORS.primary : '' }}
+                             >
+                               <span>{c.name}</span>
+                               {hasOrder && !isSelected && <span className="text-[9px] bg-amber-200 text-amber-800 px-2 py-1 rounded-full">已建立</span>}
+                               {isSelected && <CheckCircle2 className="w-4 h-4 text-white" />}
+                             </button>
+                           )
+                        })}
+                        {activeCustomersForDate.length === 0 && <div className="p-4 text-center text-gray-300 text-xs">今日無營業店家</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
               </div>
             ) : (
               <div className="space-y-2">

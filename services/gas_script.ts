@@ -172,16 +172,34 @@ function getSheetData(sheet) {
     const obj = {};
     headers.forEach((h, i) => {
       let val = row[i];
+      const headerStr = String(h);
+
       // 如果是日期對象（例如時間儲存格），轉化為字串，使用試算表的時區
       if (val instanceof Date) {
-        val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "HH:mm");
+        // 1. 如果標題包含 "日期" (Date)，強制格式化為 yyyy-MM-dd
+        if (headerStr.includes("日期") || headerStr.includes("Date")) {
+           val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "yyyy-MM-dd");
+        } 
+        // 2. 如果是 "建立時間" (CreatedAt)，保留完整時間
+        else if (headerStr.includes("建立") || headerStr.includes("Created")) {
+           val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "yyyy-MM-dd HH:mm:ss");
+        }
+        // 3. 其他包含 "時間" (Time) 的欄位 (如配送時間)，只取 HH:mm
+        else if (headerStr.includes("時間") || headerStr.includes("Time")) {
+           val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "HH:mm");
+        }
+        // 4. 其他未預期的日期欄位，預設給日期
+        else {
+           val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "yyyy-MM-dd");
+        }
       }
+      
       // 嘗試解析 JSON 字串
       if (typeof val === "string" && (val.startsWith("[") || val.startsWith("{"))) {
         try { val = JSON.parse(val); } catch(e) {}
       }
-      // 去除 Header 可能的空白
-      obj[String(h).trim()] = val;
+      
+      obj[headerStr.trim()] = val;
     });
     return obj;
   });
