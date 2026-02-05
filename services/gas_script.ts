@@ -38,6 +38,15 @@ function doPost(e) {
       case "updateProduct":
         result = updateProduct(params.data);
         break;
+      case "deleteOrder":
+        result = deleteOrder(params.data);
+        break;
+      case "deleteCustomer":
+        result = deleteCustomer(params.data);
+        break;
+      case "deleteProduct":
+        result = deleteProduct(params.data);
+        break;
       default:
         throw new Error("Unknown action: " + action);
     }
@@ -162,6 +171,48 @@ function updateProduct(product) {
     sheet.appendRow(rowData);
   }
   return true;
+}
+
+function deleteOrder(data) {
+  const sheet = SHEETS.ORDERS;
+  const values = sheet.getDataRange().getValues();
+  // 訂單ID 在第2欄 (Index 1)
+  // 倒序刪除，避免索引跑掉 (雖然這裡通常只會刪除一筆，但訂單可能有多個品項佔用多行)
+  // 注意：這裡假設訂單ID是唯一的，且會刪除所有該ID的行
+  let deleted = false;
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][1]).trim() === String(data.id).trim()) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+    }
+  }
+  return deleted;
+}
+
+function deleteCustomer(data) {
+  const sheet = SHEETS.CUSTOMERS;
+  const values = sheet.getDataRange().getValues();
+  // ID 在第1欄 (Index 0)
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0]).trim() === String(data.id).trim()) {
+      sheet.deleteRow(i + 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+function deleteProduct(data) {
+  const sheet = SHEETS.PRODUCTS;
+  const values = sheet.getDataRange().getValues();
+  // ID 在第1欄 (Index 0)
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0]).trim() === String(data.id).trim()) {
+      sheet.deleteRow(i + 1);
+      return true;
+    }
+  }
+  return false;
 }
 
 function getSheetData(sheet) {
