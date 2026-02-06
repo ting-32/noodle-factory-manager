@@ -40,7 +40,8 @@ import {
   AlertTriangle,
   DollarSign,
   Calculator,
-  Truck
+  Truck,
+  CalendarCheck
 } from 'lucide-react';
 import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem, CustomerPrice } from './types';
 import { COLORS, WEEKDAYS, GAS_URL as DEFAULT_GAS_URL, UNITS, DELIVERY_METHODS } from './constants';
@@ -626,7 +627,7 @@ const App: React.FC = () => {
     return DEFAULT_GAS_URL;
   });
 
-  const [activeTab, setActiveTab] = useState<'orders' | 'customers' | 'products' | 'work'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'customers' | 'products' | 'work' | 'schedule'>('orders');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -648,6 +649,9 @@ const App: React.FC = () => {
   const [workCustomerFilter, setWorkCustomerFilter] = useState('');
   const [workProductFilter, setWorkProductFilter] = useState<string[]>([]);
   const [workDeliveryMethodFilter, setWorkDeliveryMethodFilter] = useState<string[]>([]);
+  
+  // 行程表專用狀態
+  const [scheduleDate, setScheduleDate] = useState<string>(getTomorrowDate());
 
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
@@ -752,6 +756,33 @@ const App: React.FC = () => {
     return { totalPrice, details };
   }, [orderForm.items, orderForm.customerId, customers, products]);
 
+  // --- 計算單張訂單的總金額 (用於行程列表) ---
+  const calculateOrderTotalAmount = (order: Order) => {
+    const customer = customers.find(c => c.name === order.customerName);
+    let total = 0;
+    order.items.forEach(item => {
+      const product = products.find(p => p.id === item.productId || p.name === item.productId); // 相容 ID 或名稱
+      // Find price in customer list
+      const priceItem = customer?.priceList?.find(pl => pl.productId === (product?.id || item.productId));
+      const unitPrice = priceItem ? priceItem.price : (product?.price || 0);
+      
+      if (item.unit === '元') {
+        total += item.quantity;
+      } else {
+        total += item.quantity * unitPrice;
+      }
+    });
+    return total;
+  };
+
+  const scheduleOrders = useMemo(() => {
+    return orders
+      .filter(o => o.deliveryDate === scheduleDate)
+      .sort((a, b) => {
+        // Simple string sort for "HH:mm" works for 24h time
+        return a.deliveryTime.localeCompare(b.deliveryTime);
+      });
+  }, [orders, scheduleDate]);
 
   useEffect(() => {
     const authStatus = localStorage.getItem('nm_auth_status');
@@ -996,7 +1027,10 @@ const App: React.FC = () => {
     setIsSaving(true);
     const existingOrders = groupedOrders[quickAddData.customerName] || [];
     const baseOrder = existingOrders[0];
-    const deliveryTime = baseOrder ? baseOrder.deliveryTime : '08:00';
+    
+    // 修改：追加訂單的時間設定為當下時間 (HH:mm)
+    const now = new Date();
+    const deliveryTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     
     // 追加訂單時，繼承原有訂單的配送方式，或使用客戶預設
     const customer = customers.find(c => c.name === quickAddData.customerName);
@@ -1007,7 +1041,7 @@ const App: React.FC = () => {
       createdAt: new Date().toISOString(),
       customerName: quickAddData.customerName,
       deliveryDate: selectedDate,
-      deliveryTime: deliveryTime,
+      deliveryTime: deliveryTime, // 使用當下時間
       deliveryMethod: deliveryMethod, // 追加訂單也帶入配送方式
       items: [{ productId: quickAddData.productId, quantity: quickAddData.quantity }],
       note: '追加單',
@@ -1028,6 +1062,28 @@ const App: React.FC = () => {
     setOrders([newOrder, ...orders]);
     setIsSaving(false);
     setQuickAddData(null);
+  };
+
+  const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
+    // 樂觀更新
+    const previousOrders = [...orders];
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+
+    try {
+      if (apiEndpoint) {
+        await fetch(apiEndpoint, {
+          method: 'POST',
+          body: JSON.stringify({ 
+            action: 'updateOrderStatus', 
+            data: { id: orderId, status: newStatus } 
+          })
+        });
+      }
+    } catch (e) {
+      console.error("狀態更新失敗", e);
+      alert("狀態更新失敗，請檢查網路。");
+      setOrders(previousOrders); // 還原
+    }
   };
 
   // --- 實際執行刪除的邏輯 (由 Modal 觸發) ---
@@ -1408,6 +1464,103 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {activeTab === 'schedule' && (
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="px-1">
+              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-4">
+                <CalendarCheck className="w-5 h-5" style={{ color: COLORS.primary }} /> 配送行程
+              </h2>
+              
+              {/* 月曆 */}
+              <div className="mb-6">
+                <WorkCalendar selectedDate={scheduleDate} onSelect={setScheduleDate} orders={orders} />
+              </div>
+
+              <div className="space-y-4">
+                 <div className="flex justify-between items-center px-2">
+                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                       <Clock className="w-4 h-4" /> 配送明細 [{scheduleDate}]
+                    </h3>
+                    <div className="text-xs font-bold text-gray-300">
+                       共 {scheduleOrders.length} 筆訂單
+                    </div>
+                 </div>
+
+                 {scheduleOrders.length > 0 ? (
+                   scheduleOrders.map((order) => {
+                     const totalAmount = calculateOrderTotalAmount(order);
+                     return (
+                       <div key={order.id} className="bg-white rounded-[24px] overflow-hidden shadow-sm border border-white transition-all">
+                          {/* 卡片標頭：時間與狀態 */}
+                          <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex justify-between items-center">
+                             <div className="flex items-center gap-2">
+                                <span className="text-lg font-black text-slate-700">{formatTimeDisplay(order.deliveryTime)}</span>
+                                {order.deliveryMethod && (
+                                   <span className="text-[10px] font-bold text-gray-400 border border-gray-200 px-1.5 py-0.5 rounded-lg bg-white">
+                                      {order.deliveryMethod}
+                                   </span>
+                                )}
+                             </div>
+                             
+                             {/* 狀態下拉選單 */}
+                             <div className="relative">
+                               <select 
+                                 value={order.status || OrderStatus.PENDING}
+                                 onChange={(e) => updateOrderStatus(order.id, e.target.value as OrderStatus)}
+                                 className={`
+                                   appearance-none pl-3 pr-8 py-1.5 rounded-xl text-xs font-bold border-none outline-none cursor-pointer transition-colors
+                                   ${(order.status === OrderStatus.PENDING || !order.status) ? 'bg-gray-200 text-gray-600' : ''}
+                                   ${order.status === OrderStatus.SHIPPED ? 'bg-blue-100 text-blue-600' : ''}
+                                   ${order.status === OrderStatus.PAID ? 'bg-green-100 text-green-700' : ''}
+                                 `}
+                               >
+                                  <option value={OrderStatus.PENDING}>待出貨</option>
+                                  <option value={OrderStatus.SHIPPED}>已出貨</option>
+                                  <option value={OrderStatus.PAID}>已出貨收款</option>
+                               </select>
+                               <ChevronDown className="w-3 h-3 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-50" />
+                             </div>
+                          </div>
+
+                          {/* 卡片內容：店名與品項 */}
+                          <div className="p-4">
+                             <h4 className="font-bold text-slate-800 text-base mb-3 flex justify-between">
+                                {order.customerName}
+                                <span className="font-black text-amber-600">${totalAmount.toLocaleString()}</span>
+                             </h4>
+                             
+                             <div className="space-y-1.5">
+                                {order.items.map((item, idx) => {
+                                   const p = products.find(prod => prod.id === item.productId || prod.name === item.productId);
+                                   return (
+                                     <div key={idx} className="flex justify-between items-center text-xs border-b border-gray-50 last:border-0 pb-1 last:pb-0">
+                                        <span className="text-gray-600 font-medium">{p?.name || item.productId}</span>
+                                        <span className="font-bold text-slate-700">
+                                           {item.quantity} {item.unit || p?.unit || '斤'}
+                                        </span>
+                                     </div>
+                                   );
+                                })}
+                             </div>
+                             {order.note && (
+                                <div className="mt-3 pt-2 border-t border-gray-100 text-[10px] text-gray-400 italic">
+                                   備註: {order.note}
+                                </div>
+                             )}
+                          </div>
+                       </div>
+                     );
+                   })
+                 ) : (
+                    <div className="text-center py-10">
+                       <p className="text-gray-300 font-bold text-sm">本日無配送行程</p>
+                    </div>
+                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'work' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="px-1">
@@ -1720,6 +1873,7 @@ const App: React.FC = () => {
         <NavItem active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} icon={<ClipboardList className="w-6 h-6" />} label="訂單" />
         <NavItem active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} icon={<Users className="w-6 h-6" />} label="客戶" />
         <NavItem active={activeTab === 'products'} onClick={() => setActiveTab('products')} icon={<Package className="w-6 h-6" />} label="品項" />
+        <NavItem active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')} icon={<CalendarCheck className="w-6 h-6" />} label="行程" />
         <NavItem active={activeTab === 'work'} onClick={() => setActiveTab('work')} icon={<FileText className="w-6 h-6" />} label="小抄" />
       </nav>
 

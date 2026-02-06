@@ -55,6 +55,9 @@ function doPost(e) {
       case "deleteProduct":
         result = deleteProduct(params.data);
         break;
+      case "updateOrderStatus": // 新增狀態更新
+        result = updateOrderStatus(params.data);
+        break;
       default:
         throw new Error("Unknown action: " + action);
     }
@@ -113,13 +116,33 @@ function createOrder(orderData) {
       displayProductName,
       item.quantity,
       orderData.note || "",
-      "PENDING",
-      orderData.deliveryMethod || "" // 新增：寫入配送方式 (第10欄)
+      orderData.status || "PENDING", // 確保寫入狀態
+      orderData.deliveryMethod || "" 
     ];
   });
 
   SHEETS.ORDERS.getRange(SHEETS.ORDERS.getLastRow() + 1, 1, rows.length, 10).setValues(rows);
   return orderId;
+}
+
+function updateOrderStatus(data) {
+  const sheet = SHEETS.ORDERS;
+  const values = sheet.getDataRange().getValues();
+  let updated = false;
+  
+  // 從第2行開始遍歷 (跳過表頭)
+  for (let i = 1; i < values.length; i++) {
+    // 第2欄是訂單ID (Index 1)
+    if (String(values[i][1]).trim() === String(data.id).trim()) {
+      // 第9欄是狀態 (Index 8)
+      sheet.getRange(i + 1, 9).setValue(data.status);
+      updated = true;
+      // 這裡不 break，因為同一張訂單可能會有多個品項佔用多行，全部都要更新狀態
+    }
+  }
+  
+  if (!updated) throw new Error("Order not found");
+  return true;
 }
 
 function updateCustomer(customer) {

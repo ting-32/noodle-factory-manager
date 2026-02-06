@@ -1,9 +1,9 @@
 
 export enum OrderStatus {
-  PENDING = 'PENDING',
-  PROCESSING = 'PROCESSING',
-  SHIPPED = 'SHIPPED',
-  CANCELLED = 'CANCELLED'
+  PENDING = 'PENDING', // 待出貨
+  SHIPPED = 'SHIPPED', // 已出貨
+  PAID = 'PAID',       // 已出貨收款
+  CANCELLED = 'CANCELLED' // 取消 (保留)
 }
 
 export interface Product {
