@@ -17,9 +17,17 @@ const SHEETS = {
 
 // 初始化表格結構
 function setup() {
-  SHEETS.CUSTOMERS.getRange(1, 1, 1, 7).setValues([["ID", "客戶名稱", "電話", "配送時間", "預設品項JSON", "公休日週期JSON", "特定公休日JSON"]]);
-  SHEETS.ORDERS.getRange(1, 1, 1, 9).setValues([["建立時間", "訂單ID", "客戶名", "配送日期", "配送時間", "品項", "數量", "備註", "狀態"]]);
-  SHEETS.PRODUCTS.getRange(1, 1, 1, 3).setValues([["ID", "品項", "單位"]]);
+  // 更新：增加第9欄 "配送方式"
+  // 設定 Header
+  SHEETS.CUSTOMERS.getRange(1, 1, 1, 9).setValues([["ID", "客戶名稱", "電話", "配送時間", "預設品項JSON", "公休日週期JSON", "特定公休日JSON", "價目表JSON", "配送方式"]]);
+  // 設定 JSON 欄位為純文字格式，避免 Google Sheets 自動格式化導致讀取錯誤
+  SHEETS.CUSTOMERS.getRange(2, 5, SHEETS.CUSTOMERS.getMaxRows() - 1, 4).setNumberFormat("@");
+  
+  // 更新：Orders 增加第10欄 "配送方式"
+  SHEETS.ORDERS.getRange(1, 1, 1, 10).setValues([["建立時間", "訂單ID", "客戶名", "配送日期", "配送時間", "品項", "數量", "備註", "狀態", "配送方式"]]);
+  
+  // 更新：Products 增加第4欄 "單價"
+  SHEETS.PRODUCTS.getRange(1, 1, 1, 4).setValues([["ID", "品項", "單位", "單價"]]);
 }
 
 function doPost(e) {
@@ -87,36 +95,52 @@ function createOrder(orderData) {
   const timestamp = Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
   const orderId = orderData.id || ("ORD-" + Date.now());
   
-  const rows = orderData.items.map(item => [
-    timestamp,
-    orderId,
-    orderData.customerName,
-    orderData.deliveryDate,
-    orderData.deliveryTime,
-    item.productName,
-    item.quantity,
-    orderData.note || "",
-    "PENDING"
-  ]);
+  // 自動修復：檢查 Orders 表頭 (Row 1, Col 10) 是否為 "配送方式"，若否則補上
+  const headerRange = SHEETS.ORDERS.getRange(1, 10);
+  if (headerRange.getValue() !== "配送方式") {
+    headerRange.setValue("配送方式");
+  }
 
-  SHEETS.ORDERS.getRange(SHEETS.ORDERS.getLastRow() + 1, 1, rows.length, 9).setValues(rows);
+  const rows = orderData.items.map(item => {
+    // 修改：只保留品項名稱，不加入單位
+    const displayProductName = item.productName; 
+    return [
+      timestamp,
+      orderId,
+      orderData.customerName,
+      orderData.deliveryDate,
+      orderData.deliveryTime,
+      displayProductName,
+      item.quantity,
+      orderData.note || "",
+      "PENDING",
+      orderData.deliveryMethod || "" // 新增：寫入配送方式 (第10欄)
+    ];
+  });
+
+  SHEETS.ORDERS.getRange(SHEETS.ORDERS.getLastRow() + 1, 1, rows.length, 10).setValues(rows);
   return orderId;
 }
 
 function updateCustomer(customer) {
   const sheet = SHEETS.CUSTOMERS;
-  const values = sheet.getDataRange().getValues(); // 獲取所有資料包含 Header
+  
+  // 自動修復：檢查 Customers 表頭
+  const headerRange = sheet.getRange(1, 9);
+  if (headerRange.getValue() !== "配送方式") {
+    headerRange.setValue("配送方式");
+  }
+
+  const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
 
-  // 1. 優先透過 ID 尋找是否存在 (Column Index 0)
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === String(customer.id).trim()) {
-      rowIndex = i + 1; // 陣列索引轉為試算表列號 (從1開始)
+      rowIndex = i + 1;
       break;
     }
   }
 
-  // 2. 如果 ID 沒找到，改透過「客戶名稱」尋找 (防止重複店名) (Column Index 1)
   if (rowIndex === -1) {
     for (let i = 1; i < values.length; i++) {
       if (String(values[i][1]).trim() === String(customer.name).trim()) {
@@ -133,14 +157,14 @@ function updateCustomer(customer) {
     customer.deliveryTime,
     JSON.stringify(customer.defaultItems),
     JSON.stringify(customer.offDays || []),
-    JSON.stringify(customer.holidayDates || [])
+    JSON.stringify(customer.holidayDates || []),
+    JSON.stringify(customer.priceList || []),
+    customer.deliveryMethod || ""
   ];
 
   if (rowIndex !== -1) {
-    // 找到既有資料，進行覆蓋更新
-    sheet.getRange(rowIndex, 1, 1, 7).setValues([rowData]);
+    sheet.getRange(rowIndex, 1, 1, 9).setValues([rowData]);
   } else {
-    // 完全新資料，新增一行
     sheet.appendRow(rowData);
   }
   return true;
@@ -148,10 +172,16 @@ function updateCustomer(customer) {
 
 function updateProduct(product) {
   const sheet = SHEETS.PRODUCTS;
+  
+  // 自動修復：Products 增加第4欄 "單價"
+  const headerRange = sheet.getRange(1, 4);
+  if (headerRange.getValue() !== "單價") {
+    headerRange.setValue("單價");
+  }
+
   const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
 
-  // ID 比對 (Column 0)
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === String(product.id).trim()) {
       rowIndex = i + 1;
@@ -159,14 +189,10 @@ function updateProduct(product) {
     }
   }
   
-  const rowData = [
-    product.id,
-    product.name,
-    product.unit
-  ];
+  const rowData = [product.id, product.name, product.unit, product.price || 0];
 
   if (rowIndex !== -1) {
-    sheet.getRange(rowIndex, 1, 1, 3).setValues([rowData]);
+    sheet.getRange(rowIndex, 1, 1, 4).setValues([rowData]);
   } else {
     sheet.appendRow(rowData);
   }
@@ -176,9 +202,6 @@ function updateProduct(product) {
 function deleteOrder(data) {
   const sheet = SHEETS.ORDERS;
   const values = sheet.getDataRange().getValues();
-  // 訂單ID 在第2欄 (Index 1)
-  // 倒序刪除，避免索引跑掉 (雖然這裡通常只會刪除一筆，但訂單可能有多個品項佔用多行)
-  // 注意：這裡假設訂單ID是唯一的，且會刪除所有該ID的行
   let deleted = false;
   for (let i = values.length - 1; i >= 1; i--) {
     if (String(values[i][1]).trim() === String(data.id).trim()) {
@@ -192,7 +215,6 @@ function deleteOrder(data) {
 function deleteCustomer(data) {
   const sheet = SHEETS.CUSTOMERS;
   const values = sheet.getDataRange().getValues();
-  // ID 在第1欄 (Index 0)
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === String(data.id).trim()) {
       sheet.deleteRow(i + 1);
@@ -205,7 +227,6 @@ function deleteCustomer(data) {
 function deleteProduct(data) {
   const sheet = SHEETS.PRODUCTS;
   const values = sheet.getDataRange().getValues();
-  // ID 在第1欄 (Index 0)
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === String(data.id).trim()) {
       sheet.deleteRow(i + 1);
@@ -223,34 +244,29 @@ function getSheetData(sheet) {
     const obj = {};
     headers.forEach((h, i) => {
       let val = row[i];
-      const headerStr = String(h);
-
-      // 如果是日期對象（例如時間儲存格），轉化為字串，使用試算表的時區
+      const headerStr = String(h).trim();
+      
       if (val instanceof Date) {
-        // 1. 如果標題包含 "日期" (Date)，強制格式化為 yyyy-MM-dd
         if (headerStr.includes("日期") || headerStr.includes("Date")) {
            val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "yyyy-MM-dd");
         } 
-        // 2. 如果是 "建立時間" (CreatedAt)，保留完整時間
         else if (headerStr.includes("建立") || headerStr.includes("Created")) {
            val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "yyyy-MM-dd HH:mm:ss");
         }
-        // 3. 其他包含 "時間" (Time) 的欄位 (如配送時間)，只取 HH:mm
         else if (headerStr.includes("時間") || headerStr.includes("Time")) {
            val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "HH:mm");
         }
-        // 4. 其他未預期的日期欄位，預設給日期
         else {
            val = Utilities.formatDate(val, SS.getSpreadsheetTimeZone(), "yyyy-MM-dd");
         }
       }
       
-      // 嘗試解析 JSON 字串
-      if (typeof val === "string" && (val.startsWith("[") || val.startsWith("{"))) {
+      // Robust JSON parsing: attempts to parse if it looks like a JSON array or object
+      if (typeof val === "string" && (val.trim().startsWith("[") || val.trim().startsWith("{"))) {
         try { val = JSON.parse(val); } catch(e) {}
       }
       
-      obj[headerStr.trim()] = val;
+      obj[headerStr] = val;
     });
     return obj;
   });

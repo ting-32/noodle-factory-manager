@@ -26,6 +26,22 @@ export const DELIVERY_WINDOWS = [
   '16:00 - 18:00',
 ];
 
+// 常用單位列表
+export const UNITS = [
+  '斤',
+  '元',
+  '公斤',
+  '包'
+];
+
+// 新增：配送方式選項
+export const DELIVERY_METHODS = [
+  '上車',
+  '機車配送',
+  '家裡自取',
+  '市場自取'
+];
+
 // --- 配置：GAS 部署網址 ---
 // 建議部署到網路時，將此檔案加入 .gitignore 或使用環境變數管理
 export const GAS_URL = 'https://script.google.com/macros/s/AKfycbxh3xCnUL4eGoaObWxoRuv9l31JWtR8Obs2aofmh_tPh2p4OmW0MaoK-bOBNCKGjwsi/exec';

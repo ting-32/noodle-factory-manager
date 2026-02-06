@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, 
@@ -38,10 +37,13 @@ import {
   Save,
   Key,
   Link as LinkIcon,
-  AlertTriangle
+  AlertTriangle,
+  DollarSign,
+  Calculator,
+  Truck
 } from 'lucide-react';
-import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem } from './types';
-import { COLORS, WEEKDAYS, GAS_URL as DEFAULT_GAS_URL } from './constants';
+import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem, CustomerPrice } from './types';
+import { COLORS, WEEKDAYS, GAS_URL as DEFAULT_GAS_URL, UNITS, DELIVERY_METHODS } from './constants';
 
 // --- 設定：預設共用密碼 (若 localStorage 無資料時使用) ---
 const DEFAULT_PASSWORD = "8888";
@@ -572,7 +574,7 @@ const SettingsModal: React.FC<{
 
           {/* 系統資訊 */}
           <div className="text-center pt-4 border-t border-gray-100">
-             <p className="text-[10px] text-gray-300 font-bold">Noodle Factory Manager v1.4</p>
+             <p className="text-[10px] text-gray-300 font-bold">Noodle Factory Manager v1.5</p>
           </div>
 
         </div>
@@ -580,6 +582,33 @@ const SettingsModal: React.FC<{
     </div>
   );
 };
+
+
+// --- 子組件：導航項目 ---
+const NavItem: React.FC<{
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}> = ({ active, onClick, icon, label }) => (
+  <button 
+    onClick={onClick} 
+    className={`group flex flex-col items-center justify-center w-full transition-all duration-300 ${active ? '-translate-y-1' : 'opacity-40 hover:opacity-70'}`}
+  >
+    <div 
+      className={`w-12 h-12 rounded-[20px] flex items-center justify-center mb-1 transition-all duration-300 ${active ? 'text-white shadow-xl' : 'text-slate-400 group-hover:bg-gray-50'}`}
+      style={{ 
+        backgroundColor: active ? COLORS.primary : 'transparent',
+        boxShadow: active ? `0 8px 16px -4px ${COLORS.primary}50` : 'none'
+      }}
+    >
+      {icon}
+    </div>
+    <span className={`text-[10px] font-bold tracking-widest transition-colors ${active ? 'text-slate-800' : 'text-gray-300'}`}>
+      {label}
+    </span>
+  </button>
+);
 
 
 // --- 主要 App 組件 ---
@@ -618,6 +647,7 @@ const App: React.FC = () => {
   const [workDate, setWorkDate] = useState<string>(getTomorrowDate());
   const [workCustomerFilter, setWorkCustomerFilter] = useState('');
   const [workProductFilter, setWorkProductFilter] = useState<string[]>([]);
+  const [workDeliveryMethodFilter, setWorkDeliveryMethodFilter] = useState<string[]>([]);
 
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
@@ -626,6 +656,11 @@ const App: React.FC = () => {
 
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
   const [quickAddData, setQuickAddData] = useState<{customerName: string, productId: string, quantity: number} | null>(null);
+
+  // 新增：暫存價目表設定
+  const [tempPriceProdId, setTempPriceProdId] = useState('');
+  const [tempPriceValue, setTempPriceValue] = useState('');
+  const [tempPriceUnit, setTempPriceUnit] = useState('斤');
 
   // --- 確認對話框狀態 ---
   const [confirmConfig, setConfirmConfig] = useState<{
@@ -645,6 +680,7 @@ const App: React.FC = () => {
     customerId: string;
     customerName: string;
     deliveryTime: string;
+    deliveryMethod: string; // 新增狀態
     items: OrderItem[];
     note: string;
   }>({
@@ -652,7 +688,8 @@ const App: React.FC = () => {
     customerId: '',
     customerName: '',
     deliveryTime: '08:00',
-    items: [{ productId: '', quantity: 10 }],
+    deliveryMethod: '', // 初始化為空
+    items: [{ productId: '', quantity: 10, unit: '斤' }],
     note: ''
   });
 
@@ -661,6 +698,60 @@ const App: React.FC = () => {
   const [isEditingProduct, setIsEditingProduct] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<Partial<Product>>({});
   const [customerSearch, setCustomerSearch] = useState('');
+
+  // ------------------ 訂單總結與金額計算 (useMemo) ------------------
+  const orderSummary = useMemo(() => {
+    const customer = customers.find(c => c.id === orderForm.customerId);
+    let totalPrice = 0;
+    
+    const details = orderForm.items.map(item => {
+        const product = products.find(p => p.id === item.productId);
+        // Find price in customer list
+        const priceItem = customer?.priceList?.find(pl => pl.productId === item.productId);
+        // Updated: Fallback to product default price if no specific customer price
+        const unitPrice = priceItem ? priceItem.price : (product?.price || 0); 
+
+        let displayQty = item.quantity;
+        let displayUnit = item.unit || '斤'; // Default from item
+        let subtotal = 0;
+        let isCalculated = false;
+
+        if (item.unit === '元') {
+             subtotal = item.quantity; // The input IS the money
+             // Convert money to weight if price exists
+             if (unitPrice > 0) {
+                 // Example: 44元 / 22元/斤 = 2斤
+                 displayQty = parseFloat((item.quantity / unitPrice).toFixed(1)); 
+                 displayUnit = product?.unit || '斤'; // Revert to base unit (e.g., 斤)
+                 isCalculated = true;
+             } else {
+                 displayQty = 0; // Cannot calculate without price
+             }
+        } else {
+             // Standard calc: Qty * Price
+             subtotal = item.quantity * unitPrice;
+             displayQty = item.quantity;
+             displayUnit = item.unit || '斤';
+        }
+
+        totalPrice += subtotal;
+        
+        // Return structured data for the summary view
+        return { 
+          name: product?.name || '未選品項', 
+          rawQty: item.quantity,
+          rawUnit: item.unit,
+          displayQty, 
+          displayUnit, 
+          subtotal,
+          unitPrice,
+          isCalculated
+        };
+    });
+
+    return { totalPrice, details };
+  }, [orderForm.items, orderForm.customerId, customers, products]);
+
 
   useEffect(() => {
     const authStatus = localStorage.getItem('nm_auth_status');
@@ -688,12 +779,21 @@ const App: React.FC = () => {
       
       if (result.success && result.data) {
         const mappedCustomers: Customer[] = (result.data.customers || []).map((c: any) => {
+          // 嘗試多種鍵值名稱以應對表單欄位名稱可能不一致的問題
+          const priceListKey = Object.keys(c).find(k => k.includes('價目表') || k.includes('Price') || k.includes('priceList')) || '價目表JSON';
+          
           return {
             id: String(c.ID || c.id || ''),
             name: c.客戶名稱 || c.name || '',
             phone: c.電話 || c.phone || '',
             deliveryTime: c.配送時間 || c.deliveryTime || '',
+            deliveryMethod: c.配送方式 || c.deliveryMethod || '', 
             defaultItems: safeJsonArray(c.預設品項JSON || c.預設品項 || c.defaultItems),
+            priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({
+              productId: pl.productId,
+              price: Number(pl.price) || 0,
+              unit: pl.unit || '斤'
+            })),
             offDays: safeJsonArray(c.公休日週期JSON || c.公休日週期 || c.offDays),
             holidayDates: safeJsonArray(c.特定公休日JSON || c.特定公休日 || c.holidayDates)
           };
@@ -702,7 +802,8 @@ const App: React.FC = () => {
         const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({
           id: String(p.ID || p.id),
           name: p.品項 || p.name,
-          unit: p.單位 || p.unit
+          unit: p.單位 || p.unit,
+          price: Number(p.單價 || p.price) || 0 // 新增：讀取單價
         }));
 
         const rawOrders = result.data.orders || [];
@@ -720,7 +821,8 @@ const App: React.FC = () => {
               deliveryTime: o.配送時間 || o.deliveryTime,
               items: [],
               note: o.備註 || o.note || '',
-              status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING
+              status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING,
+              deliveryMethod: o.配送方式 || o.deliveryMethod || '' // 讀取訂單的配送方式
             };
           }
           const prodName = o.品項 || o.productName;
@@ -783,12 +885,24 @@ const App: React.FC = () => {
     const aggregation = new Map<string, { totalQty: number, unit: string, details: { customerName: string, qty: number }[] }>();
 
     dateOrders.forEach(o => {
+      // 1. 篩選客戶名稱
       if (workCustomerFilter && !o.customerName.toLowerCase().includes(workCustomerFilter.toLowerCase())) return;
+      
+      // 2. 篩選配送方式 (Updated logic: 優先使用訂單上的配送方式，若無則查找客戶預設)
+      if (workDeliveryMethodFilter.length > 0) {
+         const customer = customers.find(c => c.name === o.customerName);
+         const method = o.deliveryMethod || customer?.deliveryMethod || '';
+         if (!workDeliveryMethodFilter.includes(method)) return;
+      }
+
       o.items.forEach(item => {
         const product = products.find(p => p.id === item.productId || p.name === item.productId);
         const productName = product?.name || item.productId;
         const productUnit = product?.unit || '斤';
+        
+        // 3. 篩選品項
         if (workProductFilter.length > 0 && !workProductFilter.includes(productName)) return;
+        
         if (!aggregation.has(productName)) aggregation.set(productName, { totalQty: 0, unit: productUnit, details: [] });
         const entry = aggregation.get(productName)!;
         entry.totalQty += item.quantity;
@@ -796,7 +910,7 @@ const App: React.FC = () => {
       });
     });
     return Array.from(aggregation.entries()).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.totalQty - a.totalQty);
-  }, [orders, workDate, workCustomerFilter, workProductFilter, products]);
+  }, [orders, workDate, workCustomerFilter, workProductFilter, workDeliveryMethodFilter, products, customers]);
 
   const handleSelectExistingCustomer = (id: string) => {
     const cust = customers.find(c => c.id === id);
@@ -809,7 +923,8 @@ const App: React.FC = () => {
         customerId: id,
         customerName: cust.name,
         deliveryTime: formatTimeForInput(cust.deliveryTime),
-        items: cust.defaultItems && cust.defaultItems.length > 0 ? cust.defaultItems.map(di => ({ ...di })) : [{ productId: '', quantity: 10 }]
+        deliveryMethod: cust.deliveryMethod || '', // 自動帶入店家配送方式
+        items: cust.defaultItems && cust.defaultItems.length > 0 ? cust.defaultItems.map(di => ({ ...di })) : [{ productId: '', quantity: 10, unit: '斤' }]
       });
       setIsCustomerDropdownOpen(false);
     }
@@ -823,22 +938,43 @@ const App: React.FC = () => {
     if (validItems.length === 0) return;
 
     setIsSaving(true);
+    
+    // Convert logic: If the user entered "元", we should probably save the CONVERTED quantity to the backend
+    // or save the original and let backend handle. 
+    // Usually, the production team needs weight/quantity, not money.
+    // So we use the calculated displayQty for the saved order.
+    
+    const processedItems = orderSummary.details.filter(d => d.name !== '未選品項' && d.rawQty > 0).map(detail => {
+       // Find the original item to get productId (since detail uses name for display)
+       const originalItem = orderForm.items.find(i => {
+           const p = products.find(prod => prod.id === i.productId);
+           return (p?.name || '') === detail.name || i.productId === detail.name; // fuzzy match fallback
+       }) || orderForm.items[0]; // fallback
+       
+       return {
+           productId: originalItem.productId,
+           quantity: detail.displayQty, // Use calculated quantity (e.g. 2斤 instead of 44元)
+           unit: detail.displayUnit // Use calculated unit
+       };
+    });
+
     const newOrder: Order = {
       id: 'ORD-' + Date.now(),
       createdAt: new Date().toISOString(),
       customerName: finalName,
       deliveryDate: selectedDate,
       deliveryTime: orderForm.deliveryTime,
-      items: validItems,
+      deliveryMethod: orderForm.deliveryMethod, // 儲存配送方式
+      items: processedItems,
       note: orderForm.note,
       status: OrderStatus.PENDING
     };
 
     try {
       if (apiEndpoint) {
-        const uploadItems = validItems.map(item => {
+        const uploadItems = processedItems.map(item => {
           const p = products.find(prod => prod.id === item.productId);
-          return { productName: p?.name || item.productId, quantity: item.quantity };
+          return { productName: p?.name || item.productId, quantity: item.quantity, unit: item.unit };
         });
         await fetch(apiEndpoint, {
           method: 'POST',
@@ -850,7 +986,7 @@ const App: React.FC = () => {
     setOrders([newOrder, ...orders]);
     setIsSaving(false);
     setIsAddingOrder(false);
-    setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', items: [{ productId: '', quantity: 10 }], note: '' });
+    setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', deliveryMethod: '', items: [{ productId: '', quantity: 10, unit: '斤' }], note: '' });
   };
 
   const handleQuickAddSubmit = async () => {
@@ -861,6 +997,10 @@ const App: React.FC = () => {
     const existingOrders = groupedOrders[quickAddData.customerName] || [];
     const baseOrder = existingOrders[0];
     const deliveryTime = baseOrder ? baseOrder.deliveryTime : '08:00';
+    
+    // 追加訂單時，繼承原有訂單的配送方式，或使用客戶預設
+    const customer = customers.find(c => c.name === quickAddData.customerName);
+    const deliveryMethod = baseOrder?.deliveryMethod || customer?.deliveryMethod || '';
 
     const newOrder: Order = {
       id: 'Q-ORD-' + Date.now(),
@@ -868,6 +1008,7 @@ const App: React.FC = () => {
       customerName: quickAddData.customerName,
       deliveryDate: selectedDate,
       deliveryTime: deliveryTime,
+      deliveryMethod: deliveryMethod, // 追加訂單也帶入配送方式
       items: [{ productId: quickAddData.productId, quantity: quickAddData.quantity }],
       note: '追加單',
       status: OrderStatus.PENDING
@@ -1002,7 +1143,9 @@ const App: React.FC = () => {
       name: (customerForm.name || '').trim(),
       phone: (customerForm.phone || '').trim(),
       deliveryTime: customerForm.deliveryTime || '08:00',
+      deliveryMethod: customerForm.deliveryMethod || '', // 新增：儲存配送方式
       defaultItems: (customerForm.defaultItems || []).filter(i => i.productId !== ''),
+      priceList: (customerForm.priceList || []), // 儲存價目表
       offDays: customerForm.offDays || [],
       holidayDates: customerForm.holidayDates || []
     };
@@ -1025,7 +1168,8 @@ const App: React.FC = () => {
     const finalProduct = { 
       id: isEditingProduct === 'new' ? 'p' + Date.now() : (isEditingProduct as string),
       name: productForm.name || '',
-      unit: productForm.unit || '斤'
+      unit: productForm.unit || '斤',
+      price: Number(productForm.price) || 0 // 新增：儲存單價
     };
     try {
       if (apiEndpoint) {
@@ -1124,14 +1268,57 @@ const App: React.FC = () => {
               {Object.keys(groupedOrders).length > 0 ? (
                 Object.entries(groupedOrders).map(([custName, custOrders]) => {
                   const isExpanded = expandedCustomer === custName;
+                  
+                  // --- 計算該客戶今日總金額與摘要字串 ---
+                  const currentCustomer = customers.find(c => c.name === custName);
+                  let totalAmount = 0;
+                  const itemSummaries: string[] = [];
+
+                  custOrders.forEach(o => {
+                    o.items.forEach(item => {
+                      const p = products.find(prod => prod.id === item.productId);
+                      const pName = p?.name || item.productId;
+                      const unit = item.unit || p?.unit || '斤';
+                      
+                      // 建立摘要文字 (例如: 油麵 10斤)
+                      itemSummaries.push(`${pName} ${item.quantity}${unit}`);
+
+                      // 計算金額
+                      if (unit === '元') {
+                        totalAmount += item.quantity;
+                      } else {
+                        const priceInfo = currentCustomer?.priceList?.find(pl => pl.productId === item.productId);
+                        const price = priceInfo ? priceInfo.price : 0;
+                        totalAmount += (item.quantity * price);
+                      }
+                    });
+                  });
+                  
+                  const summaryText = itemSummaries.join('、');
+                  // ---------------------------------------
+
                   return (
                     <div key={custName} className="bg-white rounded-[24px] shadow-sm border border-white overflow-hidden transition-all duration-300">
                       <button onClick={() => setExpandedCustomer(isExpanded ? null : custName)} className="w-full flex items-center justify-between p-5 text-left active:bg-gray-50 transition-colors">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold transition-colors ${isExpanded ? 'bg-sage-50 text-sage-600' : 'bg-gray-50 text-gray-400'}`} style={{ color: isExpanded ? COLORS.primary : '', backgroundColor: isExpanded ? `${COLORS.primary}20` : '' }}>{custName.charAt(0)}</div>
-                          <div><h3 className={`font-bold text-lg ${isExpanded ? 'text-slate-800' : 'text-slate-600'}`}>{custName}</h3>{!isExpanded && (<p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{custOrders.reduce((sum, o) => sum + o.items.length, 0)} 個品項</p>)}</div>
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className={`w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-lg font-bold transition-colors ${isExpanded ? 'bg-sage-50 text-sage-600' : 'bg-gray-50 text-gray-400'}`} style={{ color: isExpanded ? COLORS.primary : '', backgroundColor: isExpanded ? `${COLORS.primary}20` : '' }}>{custName.charAt(0)}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                                <h3 className={`font-bold text-lg truncate ${isExpanded ? 'text-slate-800' : 'text-slate-600'}`}>{custName}</h3>
+                                {totalAmount > 0 && (
+                                  <span className="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full font-black flex-shrink-0">
+                                    ${totalAmount.toLocaleString()}
+                                  </span>
+                                )}
+                            </div>
+                            {!isExpanded && (
+                                <p className="text-[11px] text-gray-400 font-medium mt-0.5 truncate">
+                                  {summaryText || `${custOrders.reduce((sum, o) => sum + o.items.length, 0)} 個品項`}
+                                </p>
+                            )}
+                          </div>
                         </div>
-                        {isExpanded ? <ChevronUp className="w-5 h-5 text-gray-300" /> : <ChevronDown className="w-5 h-5 text-gray-300" />}
+                        {isExpanded ? <ChevronUp className="w-5 h-5 text-gray-300 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 text-gray-300 flex-shrink-0" />}
                       </button>
                       {isExpanded && (
                         <div className="bg-gray-50/50 border-t border-gray-100 p-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
@@ -1142,7 +1329,7 @@ const App: React.FC = () => {
                                  return (
                                    <div key={`${order.id}-${itemIdx}`} className="flex justify-between items-center py-2 px-2 border-b border-gray-100 last:border-0 hover:bg-white rounded-lg transition-colors">
                                      <span className="font-bold text-slate-700">{p?.name || item.productId}</span>
-                                     <div className="flex items-center gap-3"><span className="font-black text-xl text-slate-800">{item.quantity}</span><span className="text-xs text-gray-400 font-bold w-4">{p?.unit || '斤'}</span></div>
+                                     <div className="flex items-center gap-3"><span className="font-black text-xl text-slate-800">{item.quantity}</span><span className="text-xs text-gray-400 font-bold w-4">{item.unit || p?.unit || '斤'}</span></div>
                                    </div>
                                  );
                                })}
@@ -1166,7 +1353,7 @@ const App: React.FC = () => {
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex justify-between items-center px-1">
               <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Users className="w-5 h-5" style={{ color: COLORS.primary }} /> 店家管理</h2>
-              <button onClick={() => { setCustomerForm({ name: '', phone: '', deliveryTime: '08:00', defaultItems: [], offDays: [], holidayDates: [] }); setIsEditingCustomer('new'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
+              <button onClick={() => { setCustomerForm({ name: '', phone: '', deliveryTime: '08:00', defaultItems: [], offDays: [], holidayDates: [], priceList: [], deliveryMethod: '' }); setIsEditingCustomer('new'); setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
             </div>
             <div className="relative mb-2">
                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300" />
@@ -1176,16 +1363,22 @@ const App: React.FC = () => {
               <div key={c.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex items-center gap-3"><div className="w-14 h-14 rounded-[22px] bg-gray-50 flex items-center justify-center text-xl font-bold" style={{ color: COLORS.primary }}>{c.name.charAt(0)}</div><div><h3 className="font-bold text-slate-800 text-lg">{c.name}</h3><p className="text-xs text-slate-500 font-medium">{c.phone || '無電話'}</p></div></div>
-                  <div className="flex flex-col items-end gap-1"><div className="flex gap-1">{WEEKDAYS.map(d => (<div key={d.value} className={`w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold ${c.offDays?.includes(d.value) ? 'bg-rose-100 text-rose-400' : 'bg-gray-50 text-gray-300'}`}>{d.label}</div>))}</div>{c.holidayDates && c.holidayDates.length > 0 && <span className="text-[8px] font-bold text-rose-300">+{c.holidayDates.length} 特定休</span>}</div>
+                  <div className="flex flex-col items-end gap-1"><div className="flex gap-1">{WEEKDAYS.map(d => (<div key={d.value} className={`w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold ${c.offDays?.includes(d.value) ? 'bg-rose-100 text-rose-400' : 'bg-gray-50 text-gray-300'}`}>{d.label}</div>))}</div>
+                  {c.holidayDates && c.holidayDates.length > 0 && <span className="text-[8px] font-bold text-rose-300">+{c.holidayDates.length} 特定休</span>}
+                  {c.priceList && c.priceList.length > 0 && <span className="text-[8px] font-bold text-amber-500 bg-amber-50 px-1.5 py-0.5 rounded mt-1">已設 {c.priceList.length} 種單價</span>}
+                  </div>
                 </div>
                 <div className="space-y-3 mb-4 bg-gray-50/60 p-4 rounded-[24px]">
-                  <div className="text-[11px] font-bold text-slate-700">配送時間:{formatTimeDisplay(c.deliveryTime)}</div>
+                  <div className="flex justify-between">
+                    <div className="text-[11px] font-bold text-slate-700">配送時間:{formatTimeDisplay(c.deliveryTime)}</div>
+                    {c.deliveryMethod && <div className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-lg border border-gray-100">{c.deliveryMethod}</div>}
+                  </div>
                   {c.defaultItems && c.defaultItems.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-100/50">{c.defaultItems.map((di, idx) => { const p = products.find(prod => prod.id === di.productId); return (<div key={idx} className="bg-white px-2 py-1 rounded-xl text-[10px] border border-gray-100 flex items-center gap-1 shadow-sm"><span className="font-bold text-slate-700">{p?.name || '未知品項'}</span><span className="font-black" style={{ color: COLORS.primary }}>{di.quantity}{p?.unit || '斤'}</span></div>); })}</div>
+                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-100/50">{c.defaultItems.map((di, idx) => { const p = products.find(prod => prod.id === di.productId); return (<div key={idx} className="bg-white px-2 py-1 rounded-xl text-[10px] border border-gray-100 flex items-center gap-1 shadow-sm"><span className="font-bold text-slate-700">{p?.name || '未知品項'}</span><span className="font-black" style={{ color: COLORS.primary }}>{di.quantity}{di.unit || p?.unit || '斤'}</span></div>); })}</div>
                   ) : (<div className="text-[10px] text-gray-300 font-medium italic pt-2 border-t border-gray-100/50">尚未設定預設品項</div>)}
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setCustomerForm({ ...c, deliveryTime: formatTimeForInput(c.deliveryTime) }); setIsEditingCustomer(c.id); }} className="flex-1 py-3 bg-gray-50 rounded-2xl text-slate-700 font-bold text-xs flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors"><Edit2 className="w-3.5 h-3.5" /> 編輯資料</button>
+                  <button onClick={() => { setCustomerForm({ ...c, deliveryTime: formatTimeForInput(c.deliveryTime) }); setIsEditingCustomer(c.id); setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤'); }} className="flex-1 py-3 bg-gray-50 rounded-2xl text-slate-700 font-bold text-xs flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors"><Edit2 className="w-3.5 h-3.5" /> 編輯資料</button>
                   <button onClick={() => handleDeleteCustomer(c.id)} className="px-4 py-3 bg-gray-50 rounded-2xl text-rose-200 hover:text-rose-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
                 </div>
               </div>
@@ -1198,12 +1391,16 @@ const App: React.FC = () => {
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex justify-between items-center px-1">
               <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Package className="w-5 h-5" style={{ color: COLORS.primary }} /> 品項清單</h2>
-              <button onClick={() => { setProductForm({ name: '', unit: '斤' }); setIsEditingProduct('new'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
+              <button onClick={() => { setProductForm({ name: '', unit: '斤', price: 0 }); setIsEditingProduct('new'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
             </div>
             <div className="grid grid-cols-1 gap-4">
               {products.map(p => (
                 <div key={p.id} className="bg-white rounded-[24px] p-5 shadow-sm border border-white flex justify-between items-center">
-                  <div className="flex items-center gap-4"><div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center" style={{ color: COLORS.primary }}><Box className="w-5 h-5" /></div><span className="font-bold text-slate-700">{p.name} <span className="text-[10px] text-gray-300 ml-1">({p.unit})</span></span></div>
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center" style={{ color: COLORS.primary }}><Box className="w-5 h-5" /></div>
+                    <span className="font-bold text-slate-700">{p.name} <span className="text-[10px] text-gray-300 ml-1">({p.unit})</span></span>
+                    {p.price && p.price > 0 && <span className="ml-2 text-xs font-bold text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full">${p.price}</span>}
+                  </div>
                   <div className="flex gap-2"><button onClick={() => { setProductForm(p); setIsEditingProduct(p.id); }} className="p-2 text-gray-300 hover:text-slate-600 transition-colors"><Edit2 className="w-4 h-4" /></button><button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-rose-100 hover:text-rose-400 transition-colors"><Trash2 className="w-4 h-4" /></button></div>
                 </div>
               ))}
@@ -1221,6 +1418,14 @@ const App: React.FC = () => {
                   <input type="text" placeholder="篩選特定店家..." className="w-full pl-12 pr-6 py-4 bg-white rounded-[24px] border-none shadow-sm text-slate-800 font-bold focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300 text-sm" value={workCustomerFilter} onChange={(e) => setWorkCustomerFilter(e.target.value)} />
                   {workCustomerFilter && <button onClick={() => setWorkCustomerFilter('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"><X className="w-4 h-4" /></button>}
                 </div>
+                
+                {/* 配送方式篩選 */}
+                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-2">
+                  <button onClick={() => setWorkDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部方式</button>
+                  {DELIVERY_METHODS.map(m => { const isSelected = workDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setWorkDeliveryMethodFilter(workDeliveryMethodFilter.filter(x => x !== m)); } else { setWorkDeliveryMethodFilter([...workDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
+                </div>
+
+                {/* 品項篩選 */}
                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                   <button onClick={() => setWorkProductFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workProductFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部麵種</button>
                   {products.map(p => { const isSelected = workProductFilter.includes(p.name); return (<button key={p.id} onClick={() => { if (isSelected) { setWorkProductFilter(workProductFilter.filter(name => name !== p.name)); } else { setWorkProductFilter([...workProductFilter, p.name]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{p.name}</button>); })}
@@ -1302,8 +1507,73 @@ const App: React.FC = () => {
                 </div>
               </div>
             ) : (<div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">客戶名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="輸入零售名稱..." value={orderForm.customerName} onChange={(e) => setOrderForm({...orderForm, customerName: e.target.value})} /></div>)}
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送時間</label><input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={orderForm.deliveryTime} onChange={(e) => setOrderForm({...orderForm, deliveryTime: e.target.value})} /></div>
-            <div className="space-y-4"><div className="flex justify-between items-center"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">品項明細</label><button onClick={() => setOrderForm({...orderForm, items: [...orderForm.items, {productId: '', quantity: 10}]})} className="text-[10px] font-bold" style={{ color: COLORS.primary }}><Plus className="w-3 h-3 inline mr-1" /> 增加品項</button></div>{orderForm.items.map((item, idx) => (<div key={idx} className="bg-white p-5 rounded-[28px] shadow-sm flex items-center gap-4 animate-in slide-in-from-right duration-200"><select className="flex-1 bg-gray-50 p-4 rounded-xl text-sm font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={item.productId} onChange={(e) => { const n = [...orderForm.items]; n[idx].productId = e.target.value; setOrderForm({...orderForm, items: n}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><div className="flex items-center gap-2"><input type="number" className="w-20 bg-gray-50 p-4 rounded-xl text-center font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={item.quantity} onChange={(e) => { const n = [...orderForm.items]; n[idx].quantity = parseInt(e.target.value)||0; setOrderForm({...orderForm, items: n}); }} /><button onClick={() => { const n = orderForm.items.filter((_, i) => i !== idx); setOrderForm({...orderForm, items: n.length ? n : [{productId:'', quantity:10}]}); }} className="p-2 text-rose-100 hover:text-rose-300 transition-colors"><Trash2 className="w-4 h-4" /></button></div></div>))}</div>
+            
+            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送設定</label>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={orderForm.deliveryTime} onChange={(e) => setOrderForm({...orderForm, deliveryTime: e.target.value})} />
+              </div>
+              <div className="flex-1">
+                <select 
+                   value={orderForm.deliveryMethod} 
+                   onChange={(e) => setOrderForm({...orderForm, deliveryMethod: e.target.value})}
+                   className="w-full h-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all appearance-none"
+                >
+                   <option value="">配送方式...</option>
+                   {DELIVERY_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+            </div></div>
+
+            <div className="space-y-4"><div className="flex justify-between items-center"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">品項明細</label><button onClick={() => setOrderForm({...orderForm, items: [...orderForm.items, {productId: '', quantity: 10, unit: '斤'}]})} className="text-[10px] font-bold" style={{ color: COLORS.primary }}><Plus className="w-3 h-3 inline mr-1" /> 增加品項</button></div>{orderForm.items.map((item, idx) => (<div key={idx} className="bg-white p-5 rounded-[28px] shadow-sm flex items-center gap-2 animate-in slide-in-from-right duration-200 flex-wrap"><select className="w-full sm:flex-1 bg-gray-50 p-4 rounded-xl text-sm font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all mb-2 sm:mb-0" value={item.productId} onChange={(e) => { const n = [...orderForm.items]; n[idx].productId = e.target.value; setOrderForm({...orderForm, items: n}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><div className="flex items-center gap-2 w-full sm:w-auto justify-between"><input type="number" className="w-20 bg-gray-50 p-4 rounded-xl text-center font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={item.quantity} onChange={(e) => { const n = [...orderForm.items]; n[idx].quantity = parseInt(e.target.value)||0; setOrderForm({...orderForm, items: n}); }} />
+            <select value={item.unit || '斤'} onChange={(e) => { const n = [...orderForm.items]; n[idx].unit = e.target.value; setOrderForm({...orderForm, items: n}); }} className="w-20 bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all">{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select>
+            <button onClick={() => { const n = orderForm.items.filter((_, i) => i !== idx); setOrderForm({...orderForm, items: n.length ? n : [{productId:'', quantity:10, unit:'斤'}]}); }} className="p-2 text-rose-100 hover:text-rose-300 transition-colors"><Trash2 className="w-4 h-4" /></button></div></div>))}</div>
+
+            {/* --- 新增：訂單預覽與金額試算區塊 --- */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">訂單預覽與金額試算</label>
+              <div className="bg-amber-50 rounded-[24px] p-5 shadow-sm border border-amber-100/50">
+                  <div className="flex justify-between items-center mb-3 border-b border-amber-100 pb-2">
+                      <div className="flex items-center gap-2 text-amber-700">
+                         <Calculator className="w-4 h-4" />
+                         <span className="text-xs font-bold">預估清單</span>
+                      </div>
+                      <div className="text-xs font-bold text-amber-600/60">
+                         共 {orderSummary.details.filter(d => d.rawQty > 0).length} 項
+                      </div>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                      {orderSummary.details.filter(d => d.rawQty > 0).map((detail, i) => (
+                          <div key={i} className="flex justify-between items-center text-sm">
+                             <div className="flex flex-col">
+                                <span className="font-bold text-slate-700">{detail.name}</span>
+                                {detail.isCalculated && (
+                                   <span className="text-[10px] text-gray-400">
+                                     (以單價 ${detail.unitPrice} 換算: {detail.rawQty}元 &rarr; {detail.displayQty}{detail.displayUnit})
+                                   </span>
+                                )}
+                             </div>
+                             <div className="flex items-center gap-3">
+                                <span className="font-bold text-slate-600">
+                                   {detail.displayQty} {detail.displayUnit}
+                                </span>
+                                <span className="font-black text-amber-600 w-12 text-right">
+                                   ${detail.subtotal}
+                                </span>
+                             </div>
+                          </div>
+                      ))}
+                      {orderSummary.details.filter(d => d.rawQty > 0).length === 0 && (
+                          <div className="text-center text-xs text-amber-400 italic py-2">尚未加入有效品項</div>
+                      )}
+                  </div>
+                  <div className="flex justify-between items-center pt-3 border-t border-amber-200">
+                      <span className="text-xs font-bold text-amber-700">預估總金額</span>
+                      <span className="text-xl font-black text-amber-600">${orderSummary.totalPrice}</span>
+                  </div>
+              </div>
+            </div>
+
             <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">訂單備註</label><textarea className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-700 font-bold border-none resize-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300" rows={3} placeholder="備註特殊需求..." value={orderForm.note} onChange={(e) => setOrderForm({...orderForm, note: e.target.value})} /></div>
           </div>
         </div>
@@ -1313,22 +1583,137 @@ const App: React.FC = () => {
         <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
           <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsEditingCustomer(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">店家詳細資料</h2><button onClick={handleSaveCustomer} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>完成儲存</button></div>
           <div className="p-6 space-y-6 overflow-y-auto pb-10">
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">基本資訊</label><div className="space-y-4"><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="店名" value={customerForm.name || ''} onChange={(e) => setCustomerForm({...customerForm, name: e.target.value})} /><input type="tel" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="聯絡電話" value={customerForm.phone || ''} onChange={(e) => setCustomerForm({...customerForm, phone: e.target.value})} /><input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={formatTimeForInput(customerForm.deliveryTime)} onChange={(e) => setCustomerForm({...customerForm, deliveryTime: e.target.value})} /></div></div>
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">預設配送內容 (每次自動帶入)</label><div className="bg-white rounded-[28px] p-5 shadow-sm space-y-4">{customerForm.defaultItems?.map((item, idx) => (<div key={idx} className="flex gap-2 items-center"><select className="flex-1 bg-gray-50 p-3 rounded-xl text-xs font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={item.productId} onChange={(e) => { const n = [...(customerForm.defaultItems || [])]; n[idx].productId = e.target.value; setCustomerForm({...customerForm, defaultItems: n}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><input type="number" className="w-16 bg-gray-50 p-3 rounded-xl text-center font-bold border-none text-xs text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={item.quantity} onChange={(e) => { const n = [...(customerForm.defaultItems || [])]; n[idx].quantity = parseInt(e.target.value)||0; setCustomerForm({...customerForm, defaultItems: n}); }} /><button onClick={() => { const n = (customerForm.defaultItems || []).filter((_, i) => i !== idx); setCustomerForm({...customerForm, defaultItems: n}); }} className="text-rose-200 hover:text-rose-400 transition-colors"><X className="w-4 h-4" /></button></div>))}<button onClick={() => setCustomerForm({...customerForm, defaultItems: [...(customerForm.defaultItems || []), {productId:'', quantity:10}]})} className="w-full py-3 bg-gray-50 rounded-xl text-slate-400 font-bold text-[10px] flex items-center justify-center gap-1 hover:bg-gray-100 transition-colors"><Plus className="w-3 h-3" /> 新增預設品項</button></div></div>
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">公休日設定</label><div className="space-y-4"><div className="bg-white p-5 rounded-[28px] shadow-sm"><p className="text-[10px] text-gray-400 mb-3 font-bold">每週固定休</p><div className="flex justify-between">{WEEKDAYS.map(day => (<button key={day.value} onClick={() => { const current = customerForm.offDays || []; const next = current.includes(day.value) ? current.filter(d => d !== day.value) : [...current, day.value]; setCustomerForm({...customerForm, offDays: next}); }} className={`w-10 h-10 rounded-xl text-xs font-bold flex items-center justify-center transition-all ${customerForm.offDays?.includes(day.value) ? 'bg-rose-500 text-white shadow-md' : 'bg-gray-50 text-gray-300'}`}>{day.label}</button>))}</div></div><button onClick={() => setHolidayEditorId(isEditingCustomer)} className="w-full p-5 bg-white rounded-[24px] shadow-sm flex items-center justify-between font-bold text-slate-800 hover:bg-gray-100 transition-colors">特定日期公休 (月曆選擇)<span className="text-xs bg-rose-50 text-rose-400 px-3 py-1 rounded-full font-bold">{customerForm.holidayDates?.length || 0} 天</span></button></div></div>
+            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">基本資訊</label><div className="space-y-4"><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="店名" value={customerForm.name || ''} onChange={(e) => setCustomerForm({...customerForm, name: e.target.value})} /><input type="tel" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="電話" value={customerForm.phone || ''} onChange={(e) => setCustomerForm({...customerForm, phone: e.target.value})} /></div></div>
+
+            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送設定</label>
+            <div className="space-y-4">
+               {/* 新增：配送方式 */}
+               <div className="space-y-1">
+                 <label className="text-[10px] font-bold text-gray-400 pl-1">配送方式</label>
+                 <select 
+                    value={customerForm.deliveryMethod || ''} 
+                    onChange={(e) => setCustomerForm({...customerForm, deliveryMethod: e.target.value})}
+                    className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all appearance-none"
+                 >
+                    <option value="">選擇配送方式...</option>
+                    {DELIVERY_METHODS.map(method => (
+                       <option key={method} value={method}>{method}</option>
+                    ))}
+                 </select>
+               </div>
+
+               <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">配送時間</label><input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={customerForm.deliveryTime || '08:00'} onChange={(e) => setCustomerForm({...customerForm, deliveryTime: e.target.value})} /></div>
+               
+               <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">每週公休</label>
+               <div className="flex gap-2">{WEEKDAYS.map(d => {
+                  const isOff = (customerForm.offDays || []).includes(d.value);
+                  return (<button key={d.value} onClick={() => {
+                     const current = customerForm.offDays || [];
+                     const newOff = isOff ? current.filter(x => x !== d.value) : [...current, d.value];
+                     setCustomerForm({...customerForm, offDays: newOff});
+                  }} className={`w-10 h-10 rounded-xl font-bold text-xs transition-all ${isOff ? 'bg-rose-500 text-white shadow-md' : 'bg-white text-gray-400'}`}>{d.label}</button>);
+               })}</div></div>
+
+               <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">特定公休</label>
+               <div className="flex flex-wrap gap-2">
+                 {(customerForm.holidayDates || []).map(date => (
+                    <span key={date} className="bg-rose-50 text-rose-500 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1">{date} <button onClick={() => setCustomerForm({...customerForm, holidayDates: customerForm.holidayDates?.filter(d => d !== date)})}><X className="w-3 h-3" /></button></span>
+                 ))}
+                 <button onClick={() => setHolidayEditorId('new')} className="bg-gray-100 text-gray-400 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-gray-200"><Plus className="w-3 h-3" /> 新增日期</button>
+               </div></div>
+            </div></div>
+
+            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">預設品項</label>
+            <div className="space-y-3">
+               {(customerForm.defaultItems || []).map((item, idx) => (
+                  <div key={idx} className="flex gap-2">
+                     <select className="flex-1 p-3 bg-white rounded-xl text-sm font-bold text-slate-700 outline-none" value={item.productId} onChange={(e) => {
+                        const newItems = [...(customerForm.defaultItems || [])];
+                        newItems[idx] = { ...item, productId: e.target.value };
+                        setCustomerForm({...customerForm, defaultItems: newItems});
+                     }}><option value="">選擇品項</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                     <input type="number" className="w-16 p-3 bg-white rounded-xl text-center font-bold text-slate-700 outline-none" value={item.quantity} onChange={(e) => {
+                        const newItems = [...(customerForm.defaultItems || [])];
+                        newItems[idx].quantity = Number(e.target.value);
+                        setCustomerForm({...customerForm, defaultItems: newItems});
+                     }} />
+                     <select value={item.unit || '斤'} onChange={(e) => {
+                        const newItems = [...(customerForm.defaultItems || [])];
+                        newItems[idx].unit = e.target.value;
+                        setCustomerForm({...customerForm, defaultItems: newItems});
+                     }} className="w-20 p-3 bg-white rounded-xl font-bold text-slate-700 outline-none">
+                        {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                     </select>
+                     <button onClick={() => setCustomerForm({...customerForm, defaultItems: customerForm.defaultItems?.filter((_, i) => i !== idx)})} className="p-3 bg-rose-50 text-rose-400 rounded-xl"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+               ))}
+               <button onClick={() => setCustomerForm({...customerForm, defaultItems: [...(customerForm.defaultItems || []), {productId: '', quantity: 10, unit: '斤'}]})} className="w-full py-3 rounded-xl border border-dashed border-gray-300 text-gray-400 font-bold text-xs flex items-center justify-center gap-1 hover:bg-gray-50"><Plus className="w-4 h-4" /> 新增預設品項</button>
+            </div></div>
+
+            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">專屬價目表</label>
+            <div className="bg-amber-50 p-4 rounded-[24px] space-y-3">
+               <div className="flex gap-2">
+                  <select className="flex-1 p-3 bg-white rounded-xl text-sm font-bold text-slate-700 outline-none" value={tempPriceProdId} onChange={(e) => setTempPriceProdId(e.target.value)}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                  <input type="number" placeholder="單價" className="w-20 p-3 bg-white rounded-xl text-center font-bold text-slate-700 outline-none" value={tempPriceValue} onChange={(e) => setTempPriceValue(e.target.value)} />
+                  <select value={tempPriceUnit} onChange={(e) => setTempPriceUnit(e.target.value)} className="w-20 p-3 bg-white rounded-xl font-bold text-slate-700 outline-none">
+                     {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <button onClick={() => {
+                     if(tempPriceProdId && tempPriceValue) {
+                        const newPriceList = [...(customerForm.priceList || [])];
+                        const existingIdx = newPriceList.findIndex(x => x.productId === tempPriceProdId);
+                        if(existingIdx >= 0) {
+                           newPriceList[existingIdx].price = Number(tempPriceValue);
+                           newPriceList[existingIdx].unit = tempPriceUnit;
+                        } else {
+                           newPriceList.push({productId: tempPriceProdId, price: Number(tempPriceValue), unit: tempPriceUnit});
+                        }
+                        setCustomerForm({...customerForm, priceList: newPriceList});
+                        setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤');
+                     }
+                  }} className="p-3 bg-amber-400 text-white rounded-xl shadow-sm"><Plus className="w-4 h-4" /></button>
+               </div>
+               <div className="space-y-2">
+                  {(customerForm.priceList || []).map((pl, idx) => {
+                     const p = products.find(prod => prod.id === pl.productId);
+                     return (
+                        <div key={idx} className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm">
+                           <span className="text-sm font-bold text-slate-700">{p?.name || pl.productId}</span>
+                           <div className="flex items-center gap-3">
+                              <span className="font-black text-amber-500">${pl.price} <span className="text-xs text-gray-400">/ {pl.unit || '斤'}</span></span>
+                              <button onClick={() => setCustomerForm({...customerForm, priceList: customerForm.priceList?.filter((_, i) => i !== idx)})} className="text-gray-300 hover:text-rose-400"><X className="w-4 h-4" /></button>
+                           </div>
+                        </div>
+                     );
+                  })}
+               </div>
+            </div></div>
           </div>
         </div>
       )}
 
       {isEditingProduct && (
-        <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
-          <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsEditingProduct(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">品項規格編輯</h2><button onClick={handleSaveProduct} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>儲存修改</button></div>
-          <div className="p-6 space-y-6"><div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">品項名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如: 白麵, 拉麵, 意麵" value={productForm.name || ''} onChange={(e) => setProductForm({...productForm, name: e.target.value})} /></div><div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">計量單位</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如: 斤, 包, 籃" value={productForm.unit || ''} onChange={(e) => setProductForm({...productForm, unit: e.target.value})} /></div></div>
-        </div>
+         <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
+           <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsEditingProduct(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">品項資料</h2><button onClick={handleSaveProduct} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>完成儲存</button></div>
+           <div className="p-6 space-y-6">
+              <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">品項名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如：油麵 (小)" value={productForm.name || ''} onChange={(e) => setProductForm({...productForm, name: e.target.value})} /></div>
+              <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">計算單位</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如：斤" value={productForm.unit || ''} onChange={(e) => setProductForm({...productForm, unit: e.target.value})} /></div>
+              <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">預設單價</label><input type="number" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如：35" value={productForm.price || ''} onChange={(e) => setProductForm({...productForm, price: Number(e.target.value)})} /></div>
+           </div>
+         </div>
       )}
-
+      
       {holidayEditorId && (
-        <HolidayCalendar storeName={customerForm.name || ''} holidays={customerForm.holidayDates || []} onClose={() => setHolidayEditorId(null)} onToggle={d => { const current = customerForm.holidayDates || []; const next = current.includes(d) ? current.filter(x => x !== d) : [...current, d]; setCustomerForm({...customerForm, holidayDates: next}); }} />
+         <HolidayCalendar 
+            storeName={isEditingCustomer ? (customerForm.name || '') : ''}
+            holidays={customerForm.holidayDates || []}
+            onToggle={(date) => {
+               const current = customerForm.holidayDates || [];
+               const newHolidays = current.includes(date) ? current.filter(d => d !== date) : [...current, date];
+               setCustomerForm({...customerForm, holidayDates: newHolidays});
+            }}
+            onClose={() => setHolidayEditorId(null)}
+         />
       )}
 
       <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-gray-100 flex justify-around py-3 z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
@@ -1337,15 +1722,9 @@ const App: React.FC = () => {
         <NavItem active={activeTab === 'products'} onClick={() => setActiveTab('products')} icon={<Package className="w-6 h-6" />} label="品項" />
         <NavItem active={activeTab === 'work'} onClick={() => setActiveTab('work')} icon={<FileText className="w-6 h-6" />} label="小抄" />
       </nav>
+
     </div>
   );
 };
-
-const NavItem: React.FC<{ active: boolean; onClick: () => void; icon: React.ReactNode; label: string }> = ({ active, onClick, icon, label }) => (
-  <button onClick={onClick} className={`flex flex-col items-center gap-1 transition-all ${active ? 'text-sage-600' : 'text-gray-300'}`} style={{ color: active ? COLORS.primary : '' }}>
-    <div className={`p-1 rounded-xl transition-colors ${active ? 'bg-sage-50' : ''}`} style={{ backgroundColor: active ? `${COLORS.primary}15` : '' }}>{icon}</div>
-    <span className="text-[10px] font-bold uppercase tracking-widest">{label}</span>
-  </button>
-);
 
 export default App;
