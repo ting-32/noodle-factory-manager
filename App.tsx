@@ -41,7 +41,11 @@ import {
   DollarSign,
   Calculator,
   Truck,
-  CalendarCheck
+  CalendarCheck,
+  Copy,
+  MapPin,
+  Banknote,
+  Share2
 } from 'lucide-react';
 import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem, CustomerPrice } from './types';
 import { COLORS, WEEKDAYS, GAS_URL as DEFAULT_GAS_URL, UNITS, DELIVERY_METHODS } from './constants';
@@ -587,7 +591,7 @@ const SettingsModal: React.FC<{
           </section>
 
           <div className="text-center pt-4 border-t border-gray-100">
-             <p className="text-[10px] text-gray-300 font-bold">Noodle Factory Manager v1.5</p>
+             <p className="text-[10px] text-gray-300 font-bold">Noodle Factory Manager v1.6</p>
           </div>
 
         </div>
@@ -743,7 +747,8 @@ const App: React.FC = () => {
                  displayQty = 0;
              }
         } else {
-             subtotal = item.quantity * unitPrice;
+             // 四捨五入計算
+             subtotal = Math.round(item.quantity * unitPrice);
              displayQty = item.quantity;
              displayUnit = item.unit || '斤';
         }
@@ -777,13 +782,13 @@ const App: React.FC = () => {
       if (item.unit === '元') {
         total += item.quantity;
       } else {
-        total += item.quantity * unitPrice;
+        total += Math.round(item.quantity * unitPrice);
       }
     });
     return total;
   };
 
-  // --- 計算追加訂單的預覽價格 ---
+  // --- 計算追加訂單的預覽價格 (優化：支援金額反推數量) ---
   const getQuickAddPricePreview = () => {
     if (!quickAddData || !quickAddData.productId) return null;
     const product = products.find(p => p.id === quickAddData.productId);
@@ -794,19 +799,30 @@ const App: React.FC = () => {
     const priceItem = customer.priceList?.find(pl => pl.productId === product.id);
     const unitPrice = priceItem ? priceItem.price : (product.price || 0);
 
-    // Calculation
     let total = 0;
     let formula = '';
+    let isCurrencyInput = quickAddData.unit === '元';
+    let convertedDisplay = '';
 
-    if (quickAddData.unit === '元') {
-        total = quickAddData.quantity;
-        formula = '直接金額';
+    if (isCurrencyInput) {
+        total = quickAddData.quantity; // Input is money
+        if (unitPrice > 0) {
+            // Calculate quantity: Total / Unit Price
+            const qty = (quickAddData.quantity / unitPrice);
+            const displayQty = parseFloat(qty.toFixed(2)); // Clean trailing zeros
+            const baseUnit = product.unit || '斤';
+            formula = `單價 $${unitPrice}`;
+            convertedDisplay = `${displayQty} ${baseUnit}`;
+        } else {
+            formula = '無單價';
+            convertedDisplay = '---';
+        }
     } else {
-        total = quickAddData.quantity * unitPrice;
+        total = Math.round(quickAddData.quantity * unitPrice);
         formula = `$${unitPrice} x ${quickAddData.quantity}${quickAddData.unit}`;
     }
 
-    return { total, formula, unitPrice };
+    return { total, formula, unitPrice, isCurrencyInput, convertedDisplay };
   };
 
   // --- 行程列表 (包含篩選邏輯) ---
@@ -827,6 +843,105 @@ const App: React.FC = () => {
         return a.deliveryTime.localeCompare(b.deliveryTime);
       });
   }, [orders, scheduleDate, scheduleDeliveryMethodFilter, customers]);
+
+  // --- 計算行程頁面的收款統計 ---
+  const scheduleMoneySummary = useMemo(() => {
+    let totalReceivable = 0;
+    let totalCollected = 0;
+    
+    scheduleOrders.forEach(order => {
+      const amount = calculateOrderTotalAmount(order);
+      totalReceivable += amount;
+      if (order.status === OrderStatus.PAID) {
+        totalCollected += amount;
+      }
+    });
+    
+    return { totalReceivable, totalCollected };
+  }, [scheduleOrders, customers, products]);
+
+  // --- 複製訂單內容功能 ---
+  const handleCopyOrder = (custName: string, orders: Order[]) => {
+    const customer = customers.find(c => c.name === custName);
+    let totalAmount = 0;
+    const lines = [`📅 訂單日期: ${selectedDate}`, `👤 客戶: ${custName}`];
+    lines.push('----------------');
+    
+    orders.forEach(o => {
+      o.items.forEach(item => {
+        const p = products.find(prod => prod.id === item.productId);
+        const pName = p?.name || item.productId;
+        const unit = item.unit || p?.unit || '斤';
+        
+        let itemPrice = 0;
+        if (unit === '元') {
+           itemPrice = item.quantity;
+        } else {
+           const priceInfo = customer?.priceList?.find(pl => pl.productId === item.productId);
+           const uPrice = priceInfo ? priceInfo.price : 0;
+           itemPrice = Math.round(item.quantity * uPrice);
+        }
+        totalAmount += itemPrice;
+        
+        lines.push(`- ${pName}: ${item.quantity}${unit}`);
+      });
+    });
+    
+    lines.push('----------------');
+    lines.push(`💰 總金額: $${totalAmount.toLocaleString()}`);
+    if (orders[0]?.note) lines.push(`📝 備註: ${orders[0].note}`);
+    
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+       alert('訂單內容已複製！可直接貼上 Line 或簡訊。');
+    });
+  };
+
+  // --- 分享單筆訂單功能 (Share API) ---
+  const handleShareOrder = async (order: Order) => {
+    const customer = customers.find(c => c.name === order.customerName);
+    const totalAmount = calculateOrderTotalAmount(order);
+    
+    // Build text
+    let text = `🚚 配送單 [${order.deliveryDate}]\n`;
+    text += `----------------\n`;
+    text += `👤 客戶: ${order.customerName}\n`;
+    if (customer?.phone) text += `📞 電話: ${customer.phone}\n`;
+    text += `⏰ 時間: ${formatTimeDisplay(order.deliveryTime)}\n`;
+    if (order.deliveryMethod) text += `🛵 方式: ${order.deliveryMethod}\n`;
+    
+    text += `\n📦 品項:\n`;
+    order.items.forEach(item => {
+       const p = products.find(prod => prod.id === item.productId || prod.name === item.productId);
+       text += `- ${p?.name || item.productId}: ${item.quantity} ${item.unit}\n`;
+    });
+    
+    if (order.note) text += `\n📝 備註: ${order.note}\n`;
+    text += `----------------\n`;
+    text += `💰 總金額: $${totalAmount.toLocaleString()}`;
+
+    // Execute Share
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `配送單 - ${order.customerName}`,
+          text: text
+        });
+      } catch (err) {
+        console.log('Share canceled');
+      }
+    } else {
+      // Fallback
+      navigator.clipboard.writeText(text);
+      alert('配送資訊已複製！');
+    }
+  };
+
+  // --- Google Maps 導航功能 ---
+  const openGoogleMaps = (name: string) => {
+    // 簡單使用名稱搜尋，若有地址欄位可改用地址
+    const query = encodeURIComponent(name);
+    window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank');
+  };
 
   useEffect(() => {
     const authStatus = localStorage.getItem('nm_auth_status');
@@ -1069,7 +1184,33 @@ const App: React.FC = () => {
     const customer = customers.find(c => c.name === quickAddData.customerName);
     const deliveryMethod = baseOrder?.deliveryMethod || customer?.deliveryMethod || '';
 
-    // 使用所選單位
+    // --- 單位換算邏輯 ---
+    let finalQuantity = quickAddData.quantity;
+    let finalUnit = quickAddData.unit;
+    const product = products.find(p => p.id === quickAddData.productId);
+    // 預設轉換目標單位為 '斤' (若產品未設定單位，預設為斤)
+    const targetUnit = product?.unit || '斤';
+
+    if (quickAddData.unit === '元') {
+        const priceItem = customer?.priceList?.find(pl => pl.productId === quickAddData.productId);
+        const unitPrice = priceItem ? priceItem.price : (product?.price || 0);
+
+        if (unitPrice > 0) {
+            // 金額 / 單價 = 數量 (保留兩位小數)
+            finalQuantity = parseFloat((quickAddData.quantity / unitPrice).toFixed(2));
+            finalUnit = targetUnit; 
+        }
+    } else if (quickAddData.unit === '公斤' && targetUnit === '斤') {
+        // 額外支援：公斤轉台斤 (1kg = 1000g, 1台斤 = 600g => 1.666...)
+        finalQuantity = parseFloat((quickAddData.quantity * (1000 / 600)).toFixed(2));
+        finalUnit = '斤';
+    } else if (quickAddData.unit === '斤') {
+        finalUnit = '斤';
+    }
+    // 注意：若單位是 '包'，因無標準換算率，目前維持原狀。
+    // 但根據需求 "一律換算成斤"，針對可換算的單位已處理，並會在下方 uploadItems 確保。
+
+    // 使用換算後的數量與單位
     const newOrder: Order = {
       id: 'Q-ORD-' + Date.now(),
       createdAt: new Date().toISOString(),
@@ -1077,7 +1218,7 @@ const App: React.FC = () => {
       deliveryDate: selectedDate,
       deliveryTime: deliveryTime,
       deliveryMethod: deliveryMethod,
-      items: [{ productId: quickAddData.productId, quantity: quickAddData.quantity, unit: quickAddData.unit }],
+      items: [{ productId: quickAddData.productId, quantity: finalQuantity, unit: finalUnit }],
       note: '追加單',
       status: OrderStatus.PENDING
     };
@@ -1085,7 +1226,9 @@ const App: React.FC = () => {
     try {
       if (apiEndpoint) {
         const p = products.find(prod => prod.id === quickAddData.productId);
-        const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: quickAddData.quantity, unit: quickAddData.unit }];
+        // 確保寫入 GAS 的資料也是換算後的 quantity，並且 unit 設定為 finalUnit
+        // GAS 後端 createOrder 會讀取 items[i].quantity 寫入欄位
+        const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: finalQuantity, unit: finalUnit }];
         await fetch(apiEndpoint, {
           method: 'POST',
           body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } })
@@ -1272,18 +1415,18 @@ const App: React.FC = () => {
         <head>
           <title>麵廠職人 - 生產總表 - ${workDate}</title>
           <style>
-            body { font-family: sans-serif; padding: 40px; color: #333; }
-            h1 { text-align: center; margin-bottom: 5px; font-size: 24px; }
-            p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; vertical-align: top; }
-            th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            body { font-family: sans-serif; padding: 20px; color: #333; }
+            h1 { text-align: center; margin-bottom: 10px; font-size: 32px; }
+            p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 20px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
+            th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 20px; }
             tr:nth-child(even) { background-color: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             .text-right { text-align: right; }
             .text-center { text-align: center; }
-            .badge { display: inline-block; background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin: 2px; border: 1px solid #ddd; color: #555; }
-            .total-cell { font-size: 16px; font-weight: bold; }
-            .footer { margin-top: 40px; text-align: right; font-size: 10px; color: #999; border-top: 1px solid #eee; padding-top: 10px; }
+            .badge { display: inline-block; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 16px; margin: 4px; border: 1px solid #ddd; color: #555; }
+            .total-cell { font-size: 24px; font-weight: bold; }
+            .footer { margin-top: 40px; text-align: right; font-size: 14px; color: #999; border-top: 1px solid #eee; padding-top: 10px; }
           </style>
         </head>
         <body>
@@ -1293,7 +1436,7 @@ const App: React.FC = () => {
             <thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead>
             <tbody>
               ${workSheetData.map((item, idx) => `
-                <tr><td style="font-weight: bold;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>
+                <tr><td style="font-weight: bold; font-size: 22px;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center" style="font-size: 18px;">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>
               `).join('')}
             </tbody>
           </table>
@@ -1374,7 +1517,7 @@ const App: React.FC = () => {
                       } else {
                         const priceInfo = currentCustomer?.priceList?.find(pl => pl.productId === item.productId);
                         const price = priceInfo ? priceInfo.price : 0;
-                        totalAmount += (item.quantity * price);
+                        totalAmount += Math.round(item.quantity * price);
                       }
                     });
                   });
@@ -1421,6 +1564,10 @@ const App: React.FC = () => {
                              </div>
                           ))}
                           <button onClick={() => setQuickAddData({ customerName: custName, productId: '', quantity: 0, unit: '斤' })} className="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-sage-200 text-sage-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-sage-50 transition-colors" style={{ borderColor: `${COLORS.primary}40`, color: COLORS.primary }}><Plus className="w-4 h-4" /> 追加訂單</button>
+                          <div className="flex gap-2">
+                             <button onClick={() => handleCopyOrder(custName, custOrders)} className="flex-1 py-3 px-4 rounded-xl bg-gray-200 text-slate-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-gray-300 transition-colors"><Copy className="w-4 h-4" /> 複製訂單內容</button>
+                             <button onClick={() => openGoogleMaps(custName)} className="flex-1 py-3 px-4 rounded-xl bg-blue-50 text-blue-500 font-bold text-sm flex items-center justify-center gap-2 hover:bg-blue-100 transition-colors"><MapPin className="w-4 h-4" /> 導航</button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1504,6 +1651,32 @@ const App: React.FC = () => {
                 <WorkCalendar selectedDate={scheduleDate} onSelect={setScheduleDate} orders={orders} />
               </div>
 
+              {/* 新增：收款儀表板 (Driver Payment Dashboard) */}
+              <div className="bg-slate-800 rounded-[28px] p-5 shadow-lg text-white mb-6 relative overflow-hidden">
+                 <div className="absolute right-[-10px] bottom-[-20px] text-slate-700 opacity-20 rotate-12">
+                    <Banknote className="w-32 h-32" />
+                 </div>
+                 <div className="flex justify-between items-start mb-2 relative z-10">
+                    <div>
+                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">本日應收總額</p>
+                       <h3 className="text-3xl font-black mt-1">${scheduleMoneySummary.totalReceivable.toLocaleString()}</h3>
+                    </div>
+                    <div className="text-right">
+                       <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">已收款</p>
+                       <h3 className="text-xl font-bold text-emerald-300 mt-1">${scheduleMoneySummary.totalCollected.toLocaleString()}</h3>
+                    </div>
+                 </div>
+                 <div className="w-full bg-slate-700 rounded-full h-1.5 mt-2 relative z-10">
+                    <div 
+                       className="bg-emerald-400 h-1.5 rounded-full transition-all duration-500" 
+                       style={{ width: `${scheduleMoneySummary.totalReceivable > 0 ? (scheduleMoneySummary.totalCollected / scheduleMoneySummary.totalReceivable) * 100 : 0}%` }}
+                    ></div>
+                 </div>
+                 <p className="text-[9px] text-slate-400 mt-2 text-right relative z-10">
+                    尚有 ${(scheduleMoneySummary.totalReceivable - scheduleMoneySummary.totalCollected).toLocaleString()} 未收
+                 </p>
+              </div>
+
               {/* 新增：配送方式篩選器 */}
               <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-4">
                   <button onClick={() => setScheduleDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${scheduleDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部方式</button>
@@ -1555,10 +1728,24 @@ const App: React.FC = () => {
                           </div>
 
                           <div className="p-4">
-                             <h4 className="font-bold text-slate-800 text-base mb-3 flex justify-between">
-                                {order.customerName}
-                                <span className="font-black text-amber-600">${totalAmount.toLocaleString()}</span>
-                             </h4>
+                             <div className="flex justify-between items-start mb-3">
+                                <h4 className="font-bold text-slate-800 text-base flex-1">
+                                    {order.customerName}
+                                </h4>
+                                <div className="flex flex-col items-end">
+                                    <span className="font-black text-amber-600">${totalAmount.toLocaleString()}</span>
+                                    <div className="flex gap-2 mt-1">
+                                      {/* 分享按鈕 */}
+                                      <button onClick={() => handleShareOrder(order)} className="text-slate-400 hover:text-slate-600 flex items-center gap-0.5 text-[10px] font-bold">
+                                         <Share2 className="w-3 h-3" /> 分享
+                                      </button>
+                                      {/* 地圖按鈕 */}
+                                      <button onClick={() => openGoogleMaps(order.customerName)} className="text-blue-400 hover:text-blue-600 flex items-center gap-0.5 text-[10px] font-bold">
+                                         <MapPin className="w-3 h-3" /> 導航
+                                      </button>
+                                    </div>
+                                </div>
+                             </div>
                              
                              <div className="space-y-1.5">
                                 {order.items.map((item, idx) => {
@@ -1681,6 +1868,22 @@ const App: React.FC = () => {
                       {(() => {
                          const preview = getQuickAddPricePreview();
                          if (!preview) return null;
+                         
+                         if (preview.isCurrencyInput) {
+                             return (
+                                <>
+                                   <div className="flex flex-col">
+                                      <span className="text-[10px] font-bold text-amber-600/70 uppercase tracking-widest">自動換算</span>
+                                      <span className="text-xs font-medium text-amber-700/60 mt-0.5">{preview.formula}</span>
+                                   </div>
+                                   <div className="text-right">
+                                       <span className="text-2xl font-black text-amber-500">{preview.convertedDisplay}</span>
+                                       <p className="text-[10px] text-amber-400 font-bold">(約 ${preview.total})</p>
+                                   </div>
+                                </>
+                             );
+                         }
+
                          return (
                             <>
                                <div className="flex flex-col">
