@@ -322,17 +322,22 @@ const HolidayCalendar: React.FC<{
   );
 };
 
-// --- 子組件：工作小抄專用嵌入式月曆 ---
+// --- 子組件：工作小抄專用嵌入式月曆 (支援多選) ---
 const WorkCalendar: React.FC<{ 
-  selectedDate: string; 
-  onSelect: (date: string) => void;
+  selectedDate: string | string[]; 
+  onSelect: (date: any) => void;
   orders: Order[];
 }> = ({ selectedDate, onSelect, orders }) => {
+  // Determine if we are in multi-select mode based on prop type
+  const isMulti = Array.isArray(selectedDate);
+  // Base date for view: use first selected date or today
+  const baseDateStr = isMulti ? (selectedDate[0] || getTomorrowDate()) : (selectedDate as string);
+
   const parseLocalDate = (dateStr: string) => {
     const [y, m, d] = dateStr.split('-').map(Number);
     return new Date(y, m - 1, d);
   };
-  const [viewDate, setViewDate] = useState(parseLocalDate(selectedDate));
+  const [viewDate, setViewDate] = useState(parseLocalDate(baseDateStr));
   
   const datesWithOrders = useMemo(() => {
     const set = new Set(orders.map(o => o.deliveryDate));
@@ -356,6 +361,19 @@ const WorkCalendar: React.FC<{
     return days;
   }, [viewDate]);
 
+  const handleDateClick = (dateStr: string) => {
+    if (isMulti) {
+      const current = selectedDate as string[];
+      if (current.includes(dateStr)) {
+        onSelect(current.filter(d => d !== dateStr));
+      } else {
+        onSelect([...current, dateStr].sort());
+      }
+    } else {
+      onSelect(dateStr);
+    }
+  };
+
   return (
     <div className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
       <div className="flex justify-between items-center mb-4">
@@ -368,12 +386,15 @@ const WorkCalendar: React.FC<{
           <div key={d.value} className="text-[10px] font-bold text-gray-300 uppercase py-2">{d.label}</div>
         ))}
         {calendarDays.map((item, idx) => {
-          const isSelected = item.dateStr === selectedDate;
+          const isSelected = isMulti 
+            ? (selectedDate as string[]).includes(item.dateStr || '')
+            : item.dateStr === selectedDate;
+            
           const hasOrder = item.dateStr && datesWithOrders.has(item.dateStr);
           return (
             <div 
               key={idx} 
-              onClick={() => item.dateStr && onSelect(item.dateStr)}
+              onClick={() => item.dateStr && handleDateClick(item.dateStr)}
               className={`aspect-square flex flex-col items-center justify-center text-sm rounded-xl cursor-pointer transition-all border relative ${!item.day ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-50'} ${isSelected ? 'text-white font-bold shadow-md' : 'bg-white border-transparent text-gray-600'}`}
               style={{ backgroundColor: isSelected ? COLORS.primary : '' }}
             >
@@ -660,8 +681,8 @@ const App: React.FC = () => {
     return getTomorrowDate();
   });
 
-  // 工作小抄專用狀態
-  const [workDate, setWorkDate] = useState<string>(getTomorrowDate());
+  // 工作小抄專用狀態 - 改為陣列支援多天選擇
+  const [workDates, setWorkDates] = useState<string[]>([getTomorrowDate()]);
   const [workCustomerFilter, setWorkCustomerFilter] = useState('');
   const [workProductFilter, setWorkProductFilter] = useState<string[]>([]);
   const [workDeliveryMethodFilter, setWorkDeliveryMethodFilter] = useState<string[]>([]);
@@ -1071,7 +1092,8 @@ const App: React.FC = () => {
   }, [customers, customerSearch]);
 
   const workSheetData = useMemo(() => {
-    const dateOrders = orders.filter(o => o.deliveryDate === workDate);
+    // 支援多天選取：過濾條件改為 "日期在 workDates 陣列中"
+    const dateOrders = orders.filter(o => workDates.includes(o.deliveryDate));
     const aggregation = new Map<string, { totalQty: number, unit: string, details: { customerName: string, qty: number }[] }>();
 
     dateOrders.forEach(o => {
@@ -1097,7 +1119,7 @@ const App: React.FC = () => {
       });
     });
     return Array.from(aggregation.entries()).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.totalQty - a.totalQty);
-  }, [orders, workDate, workCustomerFilter, workProductFilter, workDeliveryMethodFilter, products, customers]);
+  }, [orders, workDates, workCustomerFilter, workProductFilter, workDeliveryMethodFilter, products, customers]);
 
   const handleSelectExistingCustomer = (id: string) => {
     const cust = customers.find(c => c.id === id);
@@ -1409,11 +1431,18 @@ const App: React.FC = () => {
     if (workSheetData.length === 0) { alert('目前沒有資料可供匯出'); return; }
     const printWindow = window.open('', '_blank');
     if (!printWindow) { alert('彈跳視窗被封鎖，無法開啟列印頁面。\n\n請允許本網站顯示彈跳視窗，或嘗試使用瀏覽器選單的「列印」功能。'); window.print(); return; }
+    
+    // Format dates for display
+    const sortedDates = [...workDates].sort();
+    const dateRangeDisplay = sortedDates.length > 1 
+       ? `${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]} (${sortedDates.length}天)`
+       : sortedDates[0];
+
     const htmlContent = `
       <!DOCTYPE html>
       <html>
         <head>
-          <title>麵廠職人 - 生產總表 - ${workDate}</title>
+          <title>麵廠職人 - 生產總表</title>
           <style>
             body { font-family: sans-serif; padding: 20px; color: #333; }
             h1 { text-align: center; margin-bottom: 10px; font-size: 32px; }
@@ -1431,7 +1460,7 @@ const App: React.FC = () => {
         </head>
         <body>
           <h1>生產總表</h1>
-          <p class="date">出貨日期: ${workDate}</p>
+          <p class="date">出貨日期: ${dateRangeDisplay}</p>
           <table>
             <thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead>
             <tbody>
@@ -1800,10 +1829,10 @@ const App: React.FC = () => {
                   {products.map(p => { const isSelected = workProductFilter.includes(p.name); return (<button key={p.id} onClick={() => { if (isSelected) { setWorkProductFilter(workProductFilter.filter(name => name !== p.name)); } else { setWorkProductFilter([...workProductFilter, p.name]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{p.name}</button>); })}
                 </div>
               </div>
-              <div className="mb-6"><WorkCalendar selectedDate={workDate} onSelect={setWorkDate} orders={orders} /></div>
+              <div className="mb-6"><WorkCalendar selectedDate={workDates} onSelect={setWorkDates} orders={orders} /></div>
               <div className="space-y-4">
                 <div className="flex justify-between items-center px-2">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><ListChecks className="w-4 h-4" /> 生產總表 [{workDate}]</h3>
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><ListChecks className="w-4 h-4" /> 生產總表 [{workDates.length}天]</h3>
                   <div className="flex items-center gap-2"><span className="text-[10px] font-bold text-gray-300">{workSheetData.length} 種品項</span><button onClick={handlePrint} className="bg-slate-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-slate-800 transition-colors shadow-sm active:scale-95"><Printer className="w-3.5 h-3.5" /> 列印 / 匯出 PDF</button></div>
                 </div>
                 {workSheetData.length > 0 ? (
@@ -1813,7 +1842,7 @@ const App: React.FC = () => {
                       <div className="p-4 bg-white space-y-2 border-t border-gray-100">{item.details.map((detail, dIdx) => (<div key={dIdx} className="flex justify-between items-center py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"><span className="text-sm font-bold text-slate-600">{detail.customerName}</span><span className="text-sm font-bold text-slate-400">{detail.qty} {item.unit}</span></div>))}</div>
                     </div>
                   ))
-                ) : (<div className="text-center py-10"><div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4"><WifiOff className="w-8 h-8 text-gray-300" /></div><p className="text-gray-300 font-bold text-sm">該日無生產需求</p><p className="text-xs text-gray-200 mt-1">請選擇其他日期或調整篩選條件</p></div>)}
+                ) : (<div className="text-center py-10"><div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4"><WifiOff className="w-8 h-8 text-gray-300" /></div><p className="text-gray-300 font-bold text-sm">所選日期無生產需求</p><p className="text-xs text-gray-200 mt-1">請選擇其他日期或調整篩選條件</p></div>)}
               </div>
             </div>
           </div>
