@@ -100,8 +100,7 @@ const safeJsonArray = (val: any) => {
 const formatTimeDisplay = (time: any) => {
   if (!time) return '未設定';
   
-  // 1. 處理 Date 物件或 ISO 時間字串 (如 1899-12-30T09:40:00.000Z)
-  // 透過檢查是否包含 '-' 來區分 ISO 字串與普通 HH:mm 字串
+  // 1. 處理 Date 物件或 ISO 時間字串
   const date = new Date(time);
   if (!isNaN(date.getTime()) && String(time).includes('-')) {
     const h = date.getHours();
@@ -114,14 +113,12 @@ const formatTimeDisplay = (time: any) => {
   const parts = str.split(':');
   if (parts.length >= 2) {
     const h = parseInt(parts[0], 10);
-    // 關鍵修正：排除年份被誤判為小時的情況 (例如 1899)
     if (!isNaN(h) && h >= 0 && h < 24) {
        const m = parts[1].substring(0, 2);
        return `${h}:${m}`;
     }
   }
   
-  // 如果上述都失敗，回傳原始字串
   return str;
 };
 
@@ -129,7 +126,6 @@ const formatTimeDisplay = (time: any) => {
 const formatTimeForInput = (time: any) => {
   if (!time) return '08:00';
 
-  // 1. 處理 Date 物件或 ISO 時間字串
   const date = new Date(time);
   if (!isNaN(date.getTime()) && String(time).includes('-')) {
     const h = String(date.getHours()).padStart(2, '0');
@@ -137,7 +133,6 @@ const formatTimeForInput = (time: any) => {
     return `${h}:${m}`;
   }
 
-  // 2. 處理字串
   const str = String(time).trim();
   const parts = str.split(':');
   if (parts.length >= 2) {
@@ -167,7 +162,6 @@ const LoginScreen: React.FC<{ onLogin: (password: string) => boolean }> = ({ onL
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-[#f4f1ea] p-6 relative overflow-hidden">
-      {/* 裝飾背景 */}
       <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-[#8e9775] rounded-full opacity-10 blur-3xl"></div>
       <div className="absolute bottom-[-10%] left-[-10%] w-64 h-64 bg-[#e28e8e] rounded-full opacity-10 blur-3xl"></div>
       
@@ -218,7 +212,7 @@ const LoginScreen: React.FC<{ onLogin: (password: string) => boolean }> = ({ onL
   );
 };
 
-// --- 子組件：自訂確認視窗 (取代 window.confirm) ---
+// --- 子組件：自訂確認視窗 ---
 const ConfirmModal: React.FC<{
   isOpen: boolean;
   title: string;
@@ -336,7 +330,6 @@ const WorkCalendar: React.FC<{
   };
   const [viewDate, setViewDate] = useState(parseLocalDate(selectedDate));
   
-  // 建立一個 Set 儲存有訂單的日期，用於顯示小圓點
   const datesWithOrders = useMemo(() => {
     const set = new Set(orders.map(o => o.deliveryDate));
     return set;
@@ -381,7 +374,6 @@ const WorkCalendar: React.FC<{
               style={{ backgroundColor: isSelected ? COLORS.primary : '' }}
             >
               <span className="z-10">{item.day}</span>
-              {/* 有訂單的小圓點 */}
               {hasOrder && !isSelected && (
                 <span className="w-1 h-1 rounded-full bg-amber-400 absolute bottom-2"></span>
               )}
@@ -396,7 +388,7 @@ const WorkCalendar: React.FC<{
   );
 };
 
-// --- 子組件：日期選擇器 (主頁用) ---
+// --- 子組件：日期選擇器 ---
 const DatePickerModal: React.FC<{ 
   selectedDate: string; 
   onSelect: (date: string) => void;
@@ -464,24 +456,34 @@ const DatePickerModal: React.FC<{
 const SettingsModal: React.FC<{
   onClose: () => void;
   onSync: () => void;
-  onSavePassword: (newPwd: string) => void;
+  onSavePassword: (oldPwd: string, newPwd: string) => boolean;
   currentUrl: string;
   onSaveUrl: (newUrl: string) => void;
 }> = ({ onClose, onSync, onSavePassword, currentUrl, onSaveUrl }) => {
+  const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [inputUrl, setInputUrl] = useState(currentUrl);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success'>('idle');
   const [urlSaveStatus, setUrlSaveStatus] = useState<'idle' | 'success'>('idle');
 
   const handlePasswordSubmit = () => {
-    if (newPassword.length < 4) {
-      alert('密碼長度請至少輸入 4 碼');
+    if (!oldPassword) {
+      alert('請輸入原密碼');
       return;
     }
-    onSavePassword(newPassword);
-    setSaveStatus('success');
-    setNewPassword('');
-    setTimeout(() => setSaveStatus('idle'), 2000);
+    if (newPassword.length < 4) {
+      alert('新密碼長度請至少輸入 4 碼');
+      return;
+    }
+    const success = onSavePassword(oldPassword, newPassword);
+    if (success) {
+      setSaveStatus('success');
+      setOldPassword('');
+      setNewPassword('');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } else {
+      alert('原密碼錯誤，無法變更密碼');
+    }
   };
 
   const handleUrlSubmit = () => {
@@ -506,8 +508,6 @@ const SettingsModal: React.FC<{
         </div>
         
         <div className="p-6 space-y-8">
-          
-          {/* 資料同步區塊 */}
           <section className="space-y-3">
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><RefreshCw className="w-4 h-4" /> 資料同步</h4>
             <div className="bg-gray-50 p-5 rounded-[24px]">
@@ -523,7 +523,6 @@ const SettingsModal: React.FC<{
             </div>
           </section>
 
-          {/* API 連線設定 */}
           <section className="space-y-3">
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><LinkIcon className="w-4 h-4" /> 伺服器連線 (GAS URL)</h4>
             <div className="bg-gray-50 p-5 rounded-[24px] space-y-4">
@@ -546,21 +545,35 @@ const SettingsModal: React.FC<{
             </div>
           </section>
 
-          {/* 安全性設定區塊 */}
           <section className="space-y-3">
             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><Lock className="w-4 h-4" /> 安全性設定</h4>
             <div className="bg-gray-50 p-5 rounded-[24px] space-y-4">
-               <div className="space-y-1">
-                 <label className="text-[10px] font-bold text-gray-400 pl-1">更改共用密碼</label>
-                 <div className="relative">
-                    <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                    <input 
-                      type="text" // 故意顯示明文以便確認，或是改 password
-                      placeholder="輸入新密碼" 
-                      className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-slate-800 font-bold text-sm border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                    />
+               <div className="space-y-3">
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-gray-400 pl-1">原密碼</label>
+                   <div className="relative">
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input 
+                        type="password" 
+                        placeholder="輸入目前密碼" 
+                        className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-slate-800 font-bold text-sm border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all"
+                        value={oldPassword}
+                        onChange={(e) => setOldPassword(e.target.value)}
+                      />
+                   </div>
+                 </div>
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-gray-400 pl-1">新密碼</label>
+                   <div className="relative">
+                      <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input 
+                        type="text" 
+                        placeholder="輸入新密碼" 
+                        className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-slate-800 font-bold text-sm border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                      />
+                   </div>
                  </div>
                </div>
                <button 
@@ -573,7 +586,6 @@ const SettingsModal: React.FC<{
             </div>
           </section>
 
-          {/* 系統資訊 */}
           <div className="text-center pt-4 border-t border-gray-100">
              <p className="text-[10px] text-gray-300 font-bold">Noodle Factory Manager v1.5</p>
           </div>
@@ -652,6 +664,7 @@ const App: React.FC = () => {
   
   // 行程表專用狀態
   const [scheduleDate, setScheduleDate] = useState<string>(getTomorrowDate());
+  const [scheduleDeliveryMethodFilter, setScheduleDeliveryMethodFilter] = useState<string[]>([]); // 新增：行程配送方式篩選
 
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
@@ -659,7 +672,9 @@ const App: React.FC = () => {
   const [holidayEditorId, setHolidayEditorId] = useState<string | null>(null);
 
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
-  const [quickAddData, setQuickAddData] = useState<{customerName: string, productId: string, quantity: number} | null>(null);
+  
+  // Quick Add State updated to include 'unit'
+  const [quickAddData, setQuickAddData] = useState<{customerName: string, productId: string, quantity: number, unit: string} | null>(null);
 
   // 新增：暫存價目表設定
   const [tempPriceProdId, setTempPriceProdId] = useState('');
@@ -684,7 +699,7 @@ const App: React.FC = () => {
     customerId: string;
     customerName: string;
     deliveryTime: string;
-    deliveryMethod: string; // 新增狀態
+    deliveryMethod: string;
     items: OrderItem[];
     note: string;
   }>({
@@ -692,7 +707,7 @@ const App: React.FC = () => {
     customerId: '',
     customerName: '',
     deliveryTime: '08:00',
-    deliveryMethod: '', // 初始化為空
+    deliveryMethod: '',
     items: [{ productId: '', quantity: 10, unit: '斤' }],
     note: ''
   });
@@ -710,29 +725,24 @@ const App: React.FC = () => {
     
     const details = orderForm.items.map(item => {
         const product = products.find(p => p.id === item.productId);
-        // Find price in customer list
         const priceItem = customer?.priceList?.find(pl => pl.productId === item.productId);
-        // Updated: Fallback to product default price if no specific customer price
         const unitPrice = priceItem ? priceItem.price : (product?.price || 0); 
 
         let displayQty = item.quantity;
-        let displayUnit = item.unit || '斤'; // Default from item
+        let displayUnit = item.unit || '斤';
         let subtotal = 0;
         let isCalculated = false;
 
         if (item.unit === '元') {
-             subtotal = item.quantity; // The input IS the money
-             // Convert money to weight if price exists
+             subtotal = item.quantity;
              if (unitPrice > 0) {
-                 // Example: 44元 / 22元/斤 = 2斤
                  displayQty = parseFloat((item.quantity / unitPrice).toFixed(1)); 
-                 displayUnit = product?.unit || '斤'; // Revert to base unit (e.g., 斤)
+                 displayUnit = product?.unit || '斤';
                  isCalculated = true;
              } else {
-                 displayQty = 0; // Cannot calculate without price
+                 displayQty = 0;
              }
         } else {
-             // Standard calc: Qty * Price
              subtotal = item.quantity * unitPrice;
              displayQty = item.quantity;
              displayUnit = item.unit || '斤';
@@ -740,7 +750,6 @@ const App: React.FC = () => {
 
         totalPrice += subtotal;
         
-        // Return structured data for the summary view
         return { 
           name: product?.name || '未選品項', 
           rawQty: item.quantity,
@@ -761,8 +770,7 @@ const App: React.FC = () => {
     const customer = customers.find(c => c.name === order.customerName);
     let total = 0;
     order.items.forEach(item => {
-      const product = products.find(p => p.id === item.productId || p.name === item.productId); // 相容 ID 或名稱
-      // Find price in customer list
+      const product = products.find(p => p.id === item.productId || p.name === item.productId);
       const priceItem = customer?.priceList?.find(pl => pl.productId === (product?.id || item.productId));
       const unitPrice = priceItem ? priceItem.price : (product?.price || 0);
       
@@ -775,14 +783,50 @@ const App: React.FC = () => {
     return total;
   };
 
+  // --- 計算追加訂單的預覽價格 ---
+  const getQuickAddPricePreview = () => {
+    if (!quickAddData || !quickAddData.productId) return null;
+    const product = products.find(p => p.id === quickAddData.productId);
+    const customer = customers.find(c => c.name === quickAddData.customerName);
+    if (!product || !customer) return null;
+
+    // Price lookup
+    const priceItem = customer.priceList?.find(pl => pl.productId === product.id);
+    const unitPrice = priceItem ? priceItem.price : (product.price || 0);
+
+    // Calculation
+    let total = 0;
+    let formula = '';
+
+    if (quickAddData.unit === '元') {
+        total = quickAddData.quantity;
+        formula = '直接金額';
+    } else {
+        total = quickAddData.quantity * unitPrice;
+        formula = `$${unitPrice} x ${quickAddData.quantity}${quickAddData.unit}`;
+    }
+
+    return { total, formula, unitPrice };
+  };
+
+  // --- 行程列表 (包含篩選邏輯) ---
   const scheduleOrders = useMemo(() => {
     return orders
-      .filter(o => o.deliveryDate === scheduleDate)
+      .filter(o => {
+        if (o.deliveryDate !== scheduleDate) return false;
+        
+        // 配送方式篩選
+        if (scheduleDeliveryMethodFilter.length > 0) {
+           const customer = customers.find(c => c.name === o.customerName);
+           const method = o.deliveryMethod || customer?.deliveryMethod || '';
+           if (!scheduleDeliveryMethodFilter.includes(method)) return false;
+        }
+        return true;
+      })
       .sort((a, b) => {
-        // Simple string sort for "HH:mm" works for 24h time
         return a.deliveryTime.localeCompare(b.deliveryTime);
       });
-  }, [orders, scheduleDate]);
+  }, [orders, scheduleDate, scheduleDeliveryMethodFilter, customers]);
 
   useEffect(() => {
     const authStatus = localStorage.getItem('nm_auth_status');
@@ -810,7 +854,6 @@ const App: React.FC = () => {
       
       if (result.success && result.data) {
         const mappedCustomers: Customer[] = (result.data.customers || []).map((c: any) => {
-          // 嘗試多種鍵值名稱以應對表單欄位名稱可能不一致的問題
           const priceListKey = Object.keys(c).find(k => k.includes('價目表') || k.includes('Price') || k.includes('priceList')) || '價目表JSON';
           
           return {
@@ -834,7 +877,7 @@ const App: React.FC = () => {
           id: String(p.ID || p.id),
           name: p.品項 || p.name,
           unit: p.單位 || p.unit,
-          price: Number(p.單價 || p.price) || 0 // 新增：讀取單價
+          price: Number(p.單價 || p.price) || 0 
         }));
 
         const rawOrders = result.data.orders || [];
@@ -853,14 +896,15 @@ const App: React.FC = () => {
               items: [],
               note: o.備註 || o.note || '',
               status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING,
-              deliveryMethod: o.配送方式 || o.deliveryMethod || '' // 讀取訂單的配送方式
+              deliveryMethod: o.配送方式 || o.deliveryMethod || ''
             };
           }
           const prodName = o.品項 || o.productName;
           const prod = mappedProducts.find(p => p.name === prodName);
           orderMap[oid].items.push({
             productId: prod ? prod.id : prodName,
-            quantity: Number(o.數量 || o.quantity) || 0
+            quantity: Number(o.數量 || o.quantity) || 0,
+            unit: o.unit || prod?.unit || '斤'
           });
         });
 
@@ -880,7 +924,7 @@ const App: React.FC = () => {
     if (isAuthenticated) {
       syncData();
     }
-  }, [isAuthenticated, apiEndpoint]); // 加入 apiEndpoint 依賴，網址變更時自動重抓
+  }, [isAuthenticated, apiEndpoint]);
 
   const ordersForDate = useMemo(() => {
     return orders.filter(o => o.deliveryDate === selectedDate);
@@ -916,10 +960,8 @@ const App: React.FC = () => {
     const aggregation = new Map<string, { totalQty: number, unit: string, details: { customerName: string, qty: number }[] }>();
 
     dateOrders.forEach(o => {
-      // 1. 篩選客戶名稱
       if (workCustomerFilter && !o.customerName.toLowerCase().includes(workCustomerFilter.toLowerCase())) return;
       
-      // 2. 篩選配送方式 (Updated logic: 優先使用訂單上的配送方式，若無則查找客戶預設)
       if (workDeliveryMethodFilter.length > 0) {
          const customer = customers.find(c => c.name === o.customerName);
          const method = o.deliveryMethod || customer?.deliveryMethod || '';
@@ -931,7 +973,6 @@ const App: React.FC = () => {
         const productName = product?.name || item.productId;
         const productUnit = product?.unit || '斤';
         
-        // 3. 篩選品項
         if (workProductFilter.length > 0 && !workProductFilter.includes(productName)) return;
         
         if (!aggregation.has(productName)) aggregation.set(productName, { totalQty: 0, unit: productUnit, details: [] });
@@ -970,22 +1011,16 @@ const App: React.FC = () => {
 
     setIsSaving(true);
     
-    // Convert logic: If the user entered "元", we should probably save the CONVERTED quantity to the backend
-    // or save the original and let backend handle. 
-    // Usually, the production team needs weight/quantity, not money.
-    // So we use the calculated displayQty for the saved order.
-    
     const processedItems = orderSummary.details.filter(d => d.name !== '未選品項' && d.rawQty > 0).map(detail => {
-       // Find the original item to get productId (since detail uses name for display)
        const originalItem = orderForm.items.find(i => {
            const p = products.find(prod => prod.id === i.productId);
-           return (p?.name || '') === detail.name || i.productId === detail.name; // fuzzy match fallback
-       }) || orderForm.items[0]; // fallback
+           return (p?.name || '') === detail.name || i.productId === detail.name;
+       }) || orderForm.items[0];
        
        return {
            productId: originalItem.productId,
-           quantity: detail.displayQty, // Use calculated quantity (e.g. 2斤 instead of 44元)
-           unit: detail.displayUnit // Use calculated unit
+           quantity: detail.displayQty, 
+           unit: detail.displayUnit
        };
     });
 
@@ -995,7 +1030,7 @@ const App: React.FC = () => {
       customerName: finalName,
       deliveryDate: selectedDate,
       deliveryTime: orderForm.deliveryTime,
-      deliveryMethod: orderForm.deliveryMethod, // 儲存配送方式
+      deliveryMethod: orderForm.deliveryMethod,
       items: processedItems,
       note: orderForm.note,
       status: OrderStatus.PENDING
@@ -1028,22 +1063,21 @@ const App: React.FC = () => {
     const existingOrders = groupedOrders[quickAddData.customerName] || [];
     const baseOrder = existingOrders[0];
     
-    // 修改：追加訂單的時間設定為當下時間 (HH:mm)
     const now = new Date();
     const deliveryTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     
-    // 追加訂單時，繼承原有訂單的配送方式，或使用客戶預設
     const customer = customers.find(c => c.name === quickAddData.customerName);
     const deliveryMethod = baseOrder?.deliveryMethod || customer?.deliveryMethod || '';
 
+    // 使用所選單位
     const newOrder: Order = {
       id: 'Q-ORD-' + Date.now(),
       createdAt: new Date().toISOString(),
       customerName: quickAddData.customerName,
       deliveryDate: selectedDate,
-      deliveryTime: deliveryTime, // 使用當下時間
-      deliveryMethod: deliveryMethod, // 追加訂單也帶入配送方式
-      items: [{ productId: quickAddData.productId, quantity: quickAddData.quantity }],
+      deliveryTime: deliveryTime,
+      deliveryMethod: deliveryMethod,
+      items: [{ productId: quickAddData.productId, quantity: quickAddData.quantity, unit: quickAddData.unit }],
       note: '追加單',
       status: OrderStatus.PENDING
     };
@@ -1051,7 +1085,7 @@ const App: React.FC = () => {
     try {
       if (apiEndpoint) {
         const p = products.find(prod => prod.id === quickAddData.productId);
-        const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: quickAddData.quantity }];
+        const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: quickAddData.quantity, unit: quickAddData.unit }];
         await fetch(apiEndpoint, {
           method: 'POST',
           body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } })
@@ -1065,7 +1099,6 @@ const App: React.FC = () => {
   };
 
   const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
-    // 樂觀更新
     const previousOrders = [...orders];
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
 
@@ -1082,20 +1115,15 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("狀態更新失敗", e);
       alert("狀態更新失敗，請檢查網路。");
-      setOrders(previousOrders); // 還原
+      setOrders(previousOrders);
     }
   };
 
-  // --- 實際執行刪除的邏輯 (由 Modal 觸發) ---
   const executeDeleteOrder = async (orderId: string) => {
-    // 關閉 Modal
     setConfirmConfig(prev => ({ ...prev, isOpen: false }));
-
-    // 備份資料以供還原
     const orderBackup = orders.find(o => o.id === orderId);
     if (!orderBackup) return;
 
-    // 樂觀更新：先從畫面移除
     setOrders(prev => prev.filter(o => o.id !== orderId));
 
     try {
@@ -1108,14 +1136,12 @@ const App: React.FC = () => {
     } catch (e) { 
       console.error("刪除失敗:", e);
       alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。");
-      // 失敗時還原資料
       setOrders(prev => [...prev, orderBackup]);
     }
   };
 
   const executeDeleteCustomer = async (customerId: string) => {
     setConfirmConfig(prev => ({ ...prev, isOpen: false }));
-
     const customerBackup = customers.find(c => c.id === customerId);
     if (!customerBackup) return;
 
@@ -1137,7 +1163,6 @@ const App: React.FC = () => {
 
   const executeDeleteProduct = async (productId: string) => {
     setConfirmConfig(prev => ({ ...prev, isOpen: false }));
-
     const productBackup = products.find(p => p.id === productId);
     if (!productBackup) return;
 
@@ -1157,7 +1182,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- 呼叫刪除的 Handler (開啟 Modal) ---
   const handleDeleteOrder = (orderId: string) => {
     setConfirmConfig({
       isOpen: true,
@@ -1199,9 +1223,9 @@ const App: React.FC = () => {
       name: (customerForm.name || '').trim(),
       phone: (customerForm.phone || '').trim(),
       deliveryTime: customerForm.deliveryTime || '08:00',
-      deliveryMethod: customerForm.deliveryMethod || '', // 新增：儲存配送方式
+      deliveryMethod: customerForm.deliveryMethod || '', 
       defaultItems: (customerForm.defaultItems || []).filter(i => i.productId !== ''),
-      priceList: (customerForm.priceList || []), // 儲存價目表
+      priceList: (customerForm.priceList || []), 
       offDays: customerForm.offDays || [],
       holidayDates: customerForm.holidayDates || []
     };
@@ -1225,7 +1249,7 @@ const App: React.FC = () => {
       id: isEditingProduct === 'new' ? 'p' + Date.now() : (isEditingProduct as string),
       name: productForm.name || '',
       unit: productForm.unit || '斤',
-      price: Number(productForm.price) || 0 // 新增：儲存單價
+      price: Number(productForm.price) || 0 
     };
     try {
       if (apiEndpoint) {
@@ -1287,9 +1311,17 @@ const App: React.FC = () => {
     return false;
   };
   const handleLogout = () => { setIsAuthenticated(false); localStorage.removeItem('nm_auth_status'); setCustomers([]); setOrders([]); setProducts([]); };
-  const handleChangePassword = (newPwd: string) => { localStorage.setItem('nm_app_password', newPwd); setCurrentPassword(newPwd); };
   
-  // 新增：儲存 API URL
+  // 更新後的更改密碼邏輯：驗證舊密碼
+  const handleChangePassword = (oldPwd: string, newPwd: string) => { 
+    if (oldPwd !== currentPassword) {
+      return false; // 原密碼錯誤
+    }
+    localStorage.setItem('nm_app_password', newPwd); 
+    setCurrentPassword(newPwd); 
+    return true; // 更新成功
+  };
+  
   const handleSaveApiUrl = (newUrl: string) => {
     localStorage.setItem('nm_gas_url', newUrl);
     setApiEndpoint(newUrl);
@@ -1325,7 +1357,6 @@ const App: React.FC = () => {
                 Object.entries(groupedOrders).map(([custName, custOrders]) => {
                   const isExpanded = expandedCustomer === custName;
                   
-                  // --- 計算該客戶今日總金額與摘要字串 ---
                   const currentCustomer = customers.find(c => c.name === custName);
                   let totalAmount = 0;
                   const itemSummaries: string[] = [];
@@ -1336,10 +1367,8 @@ const App: React.FC = () => {
                       const pName = p?.name || item.productId;
                       const unit = item.unit || p?.unit || '斤';
                       
-                      // 建立摘要文字 (例如: 油麵 10斤)
                       itemSummaries.push(`${pName} ${item.quantity}${unit}`);
 
-                      // 計算金額
                       if (unit === '元') {
                         totalAmount += item.quantity;
                       } else {
@@ -1351,7 +1380,6 @@ const App: React.FC = () => {
                   });
                   
                   const summaryText = itemSummaries.join('、');
-                  // ---------------------------------------
 
                   return (
                     <div key={custName} className="bg-white rounded-[24px] shadow-sm border border-white overflow-hidden transition-all duration-300">
@@ -1392,7 +1420,7 @@ const App: React.FC = () => {
                                <div className="flex justify-end mt-1"><button onClick={(e) => { e.stopPropagation(); handleDeleteOrder(order.id); }} className="text-[10px] text-rose-300 hover:text-rose-500 px-2 py-1 flex items-center gap-1"><Trash2 className="w-3 h-3" /> 刪除此單</button></div>
                              </div>
                           ))}
-                          <button onClick={() => setQuickAddData({ customerName: custName, productId: '', quantity: 0 })} className="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-sage-200 text-sage-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-sage-50 transition-colors" style={{ borderColor: `${COLORS.primary}40`, color: COLORS.primary }}><Plus className="w-4 h-4" /> 追加訂單</button>
+                          <button onClick={() => setQuickAddData({ customerName: custName, productId: '', quantity: 0, unit: '斤' })} className="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-sage-200 text-sage-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-sage-50 transition-colors" style={{ borderColor: `${COLORS.primary}40`, color: COLORS.primary }}><Plus className="w-4 h-4" /> 追加訂單</button>
                         </div>
                       )}
                     </div>
@@ -1476,6 +1504,12 @@ const App: React.FC = () => {
                 <WorkCalendar selectedDate={scheduleDate} onSelect={setScheduleDate} orders={orders} />
               </div>
 
+              {/* 新增：配送方式篩選器 */}
+              <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-4">
+                  <button onClick={() => setScheduleDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${scheduleDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部方式</button>
+                  {DELIVERY_METHODS.map(m => { const isSelected = scheduleDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setScheduleDeliveryMethodFilter(scheduleDeliveryMethodFilter.filter(x => x !== m)); } else { setScheduleDeliveryMethodFilter([...scheduleDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
+              </div>
+
               <div className="space-y-4">
                  <div className="flex justify-between items-center px-2">
                     <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
@@ -1491,7 +1525,6 @@ const App: React.FC = () => {
                      const totalAmount = calculateOrderTotalAmount(order);
                      return (
                        <div key={order.id} className="bg-white rounded-[24px] overflow-hidden shadow-sm border border-white transition-all">
-                          {/* 卡片標頭：時間與狀態 */}
                           <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex justify-between items-center">
                              <div className="flex items-center gap-2">
                                 <span className="text-lg font-black text-slate-700">{formatTimeDisplay(order.deliveryTime)}</span>
@@ -1502,7 +1535,6 @@ const App: React.FC = () => {
                                 )}
                              </div>
                              
-                             {/* 狀態下拉選單 */}
                              <div className="relative">
                                <select 
                                  value={order.status || OrderStatus.PENDING}
@@ -1522,7 +1554,6 @@ const App: React.FC = () => {
                              </div>
                           </div>
 
-                          {/* 卡片內容：店名與品項 */}
                           <div className="p-4">
                              <h4 className="font-bold text-slate-800 text-base mb-3 flex justify-between">
                                 {order.customerName}
@@ -1572,13 +1603,11 @@ const App: React.FC = () => {
                   {workCustomerFilter && <button onClick={() => setWorkCustomerFilter('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"><X className="w-4 h-4" /></button>}
                 </div>
                 
-                {/* 配送方式篩選 */}
                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-2">
                   <button onClick={() => setWorkDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部方式</button>
                   {DELIVERY_METHODS.map(m => { const isSelected = workDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setWorkDeliveryMethodFilter(workDeliveryMethodFilter.filter(x => x !== m)); } else { setWorkDeliveryMethodFilter([...workDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
                 </div>
 
-                {/* 品項篩選 */}
                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                   <button onClick={() => setWorkProductFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workProductFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部麵種</button>
                   {products.map(p => { const isSelected = workProductFilter.includes(p.name); return (<button key={p.id} onClick={() => { if (isSelected) { setWorkProductFilter(workProductFilter.filter(name => name !== p.name)); } else { setWorkProductFilter([...workProductFilter, p.name]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{p.name}</button>); })}
@@ -1626,13 +1655,44 @@ const App: React.FC = () => {
         onCancel={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
       />
       
+      {/* 追加訂單彈窗 */}
       {quickAddData && (
         <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
            <div className="bg-white w-full max-w-xs rounded-[32px] overflow-hidden shadow-2xl animate-in zoom-in duration-200">
               <div className="p-5 bg-gray-50 border-b border-gray-100"><h3 className="text-center font-bold text-gray-800">追加訂單</h3><p className="text-center text-xs text-gray-400 font-bold">{quickAddData.customerName}</p></div>
               <div className="p-6 space-y-4">
-                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">追加品項</label><select className="w-full bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none" value={quickAddData.productId} onChange={(e) => setQuickAddData({...quickAddData, productId: e.target.value})}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">數量</label><div className="flex items-center gap-2"><button onClick={() => setQuickAddData({...quickAddData, quantity: Math.max(0, quickAddData.quantity - 5)})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">-</button><input type="number" className="flex-1 bg-gray-50 p-4 rounded-xl text-center font-black text-xl text-slate-800 outline-none" value={quickAddData.quantity} onChange={(e) => setQuickAddData({...quickAddData, quantity: parseInt(e.target.value) || 0})} /><button onClick={() => setQuickAddData({...quickAddData, quantity: quickAddData.quantity + 5})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">+</button></div></div>
+                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">追加品項</label><select className="w-full bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none" value={quickAddData.productId} onChange={(e) => { const p = products.find(x => x.id === e.target.value); setQuickAddData({...quickAddData, productId: e.target.value, unit: p?.unit || '斤'}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">數量與單位</label>
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setQuickAddData({...quickAddData, quantity: Math.max(0, quickAddData.quantity - 5)})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">-</button>
+                    <div className="flex-1 flex gap-2">
+                       <input type="number" className="w-full bg-gray-50 p-4 rounded-xl text-center font-black text-xl text-slate-800 outline-none" value={quickAddData.quantity} onChange={(e) => setQuickAddData({...quickAddData, quantity: parseInt(e.target.value) || 0})} />
+                       {/* 單位選擇下拉選單 */}
+                       <select value={quickAddData.unit || '斤'} onChange={(e) => setQuickAddData({...quickAddData, unit: e.target.value})} className="w-24 bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none">
+                          {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                       </select>
+                    </div>
+                    <button onClick={() => setQuickAddData({...quickAddData, quantity: quickAddData.quantity + 5})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">+</button>
+                </div></div>
+                
+                {/* 價格預覽區塊 */}
+                {quickAddData.productId && (
+                   <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 flex justify-between items-center animate-in fade-in slide-in-from-top-1">
+                      {(() => {
+                         const preview = getQuickAddPricePreview();
+                         if (!preview) return null;
+                         return (
+                            <>
+                               <div className="flex flex-col">
+                                  <span className="text-[10px] font-bold text-amber-600/70 uppercase tracking-widest">預估金額</span>
+                                  <span className="text-xs font-medium text-amber-700/60 mt-0.5">{preview.formula}</span>
+                               </div>
+                               <span className="text-2xl font-black text-amber-500">${preview.total}</span>
+                            </>
+                         );
+                      })()}
+                   </div>
+                )}
               </div>
               <div className="p-4 flex gap-2"><button onClick={() => setQuickAddData(null)} className="flex-1 py-3 rounded-2xl font-bold text-gray-400 hover:bg-gray-50 transition-colors">取消</button><button onClick={handleQuickAddSubmit} className="flex-1 py-3 rounded-2xl font-bold text-white shadow-lg transition-all active:scale-95" style={{ backgroundColor: COLORS.primary }}>確認追加</button></div>
            </div>
@@ -1731,8 +1791,7 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-
-      {isEditingCustomer && (
+       {isEditingCustomer && (
         <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
           <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsEditingCustomer(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">店家詳細資料</h2><button onClick={handleSaveCustomer} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>完成儲存</button></div>
           <div className="p-6 space-y-6 overflow-y-auto pb-10">
@@ -1876,7 +1935,6 @@ const App: React.FC = () => {
         <NavItem active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')} icon={<CalendarCheck className="w-6 h-6" />} label="行程" />
         <NavItem active={activeTab === 'work'} onClick={() => setActiveTab('work')} icon={<FileText className="w-6 h-6" />} label="小抄" />
       </nav>
-
     </div>
   );
 };
