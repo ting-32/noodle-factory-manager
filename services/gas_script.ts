@@ -12,22 +12,27 @@ const SS = SpreadsheetApp.getActiveSpreadsheet();
 const SHEETS = {
   CUSTOMERS: SS.getSheetByName("Customers") || SS.insertSheet("Customers"),
   ORDERS: SS.getSheetByName("Orders") || SS.insertSheet("Orders"),
-  PRODUCTS: SS.getSheetByName("Products") || SS.insertSheet("Products")
+  PRODUCTS: SS.getSheetByName("Products") || SS.insertSheet("Products"),
+  SETTINGS: SS.getSheetByName("Settings") || SS.insertSheet("Settings")
 };
 
 // 初始化表格結構
 function setup() {
-  // 更新：增加第9欄 "配送方式"
   // 設定 Header
   SHEETS.CUSTOMERS.getRange(1, 1, 1, 9).setValues([["ID", "客戶名稱", "電話", "配送時間", "預設品項JSON", "公休日週期JSON", "特定公休日JSON", "價目表JSON", "配送方式"]]);
   // 設定 JSON 欄位為純文字格式，避免 Google Sheets 自動格式化導致讀取錯誤
   SHEETS.CUSTOMERS.getRange(2, 5, SHEETS.CUSTOMERS.getMaxRows() - 1, 4).setNumberFormat("@");
   
-  // 更新：Orders 增加第10欄 "配送方式"
   SHEETS.ORDERS.getRange(1, 1, 1, 10).setValues([["建立時間", "訂單ID", "客戶名", "配送日期", "配送時間", "品項", "數量", "備註", "狀態", "配送方式"]]);
   
-  // 更新：Products 增加第4欄 "單價"
   SHEETS.PRODUCTS.getRange(1, 1, 1, 4).setValues([["ID", "品項", "單位", "單價"]]);
+
+  // 初始化設定頁 (密碼)
+  if (SHEETS.SETTINGS.getLastRow() === 0) {
+     SHEETS.SETTINGS.getRange(1, 1, 1, 2).setValues([["Key", "Value"]]);
+     // 預設密碼: 8888
+     SHEETS.SETTINGS.getRange(2, 1, 1, 2).setValues([["ADMIN_PASSWORD", "8888"]]);
+  }
 }
 
 function doPost(e) {
@@ -37,6 +42,12 @@ function doPost(e) {
     let result;
 
     switch (action) {
+      case "login": // 新增：後端登入驗證
+        result = login(params.data);
+        break;
+      case "changePassword": // 新增：後端更改密碼
+        result = changePassword(params.data);
+        break;
       case "createOrder":
         result = createOrder(params.data);
         break;
@@ -55,7 +66,7 @@ function doPost(e) {
       case "deleteProduct":
         result = deleteProduct(params.data);
         break;
-      case "updateOrderStatus": // 新增狀態更新
+      case "updateOrderStatus":
         result = updateOrderStatus(params.data);
         break;
       default:
@@ -94,18 +105,45 @@ function doGet(e) {
   }
 }
 
+// --- 身份驗證邏輯 ---
+function login(data) {
+  const inputPassword = String(data.password).trim();
+  const storedPassword = String(SHEETS.SETTINGS.getRange(2, 2).getValue()).trim();
+  
+  // 若後端尚未設定密碼 (例如新部署)，預設為 8888
+  if (!storedPassword) {
+    SHEETS.SETTINGS.getRange(2, 1, 1, 2).setValues([["ADMIN_PASSWORD", "8888"]]);
+    return inputPassword === "8888";
+  }
+  
+  return inputPassword === storedPassword;
+}
+
+function changePassword(data) {
+  const oldPassword = String(data.oldPassword).trim();
+  const newPassword = String(data.newPassword).trim();
+  
+  const storedPassword = String(SHEETS.SETTINGS.getRange(2, 2).getValue()).trim();
+  
+  if (storedPassword !== oldPassword) {
+    return false; // 舊密碼錯誤
+  }
+  
+  SHEETS.SETTINGS.getRange(2, 2).setValue(newPassword);
+  return true;
+}
+// ------------------
+
 function createOrder(orderData) {
   const timestamp = Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
   const orderId = orderData.id || ("ORD-" + Date.now());
   
-  // 自動修復：檢查 Orders 表頭 (Row 1, Col 10) 是否為 "配送方式"，若否則補上
   const headerRange = SHEETS.ORDERS.getRange(1, 10);
   if (headerRange.getValue() !== "配送方式") {
     headerRange.setValue("配送方式");
   }
 
   const rows = orderData.items.map(item => {
-    // 修改：只保留品項名稱，不加入單位
     const displayProductName = item.productName; 
     return [
       timestamp,
@@ -116,7 +154,7 @@ function createOrder(orderData) {
       displayProductName,
       item.quantity,
       orderData.note || "",
-      orderData.status || "PENDING", // 確保寫入狀態
+      orderData.status || "PENDING", 
       orderData.deliveryMethod || "" 
     ];
   });
@@ -130,14 +168,10 @@ function updateOrderStatus(data) {
   const values = sheet.getDataRange().getValues();
   let updated = false;
   
-  // 從第2行開始遍歷 (跳過表頭)
   for (let i = 1; i < values.length; i++) {
-    // 第2欄是訂單ID (Index 1)
     if (String(values[i][1]).trim() === String(data.id).trim()) {
-      // 第9欄是狀態 (Index 8)
       sheet.getRange(i + 1, 9).setValue(data.status);
       updated = true;
-      // 這裡不 break，因為同一張訂單可能會有多個品項佔用多行，全部都要更新狀態
     }
   }
   
@@ -148,7 +182,6 @@ function updateOrderStatus(data) {
 function updateCustomer(customer) {
   const sheet = SHEETS.CUSTOMERS;
   
-  // 自動修復：檢查 Customers 表頭
   const headerRange = sheet.getRange(1, 9);
   if (headerRange.getValue() !== "配送方式") {
     headerRange.setValue("配送方式");
@@ -196,7 +229,6 @@ function updateCustomer(customer) {
 function updateProduct(product) {
   const sheet = SHEETS.PRODUCTS;
   
-  // 自動修復：Products 增加第4欄 "單價"
   const headerRange = sheet.getRange(1, 4);
   if (headerRange.getValue() !== "單價") {
     headerRange.setValue("單價");

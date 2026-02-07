@@ -1,11 +1,17 @@
 
 export const COLORS = {
-  bg: '#f4f1ea',       // Linen
-  primary: '#8e9775',  // Sage Morandi
-  secondary: '#e28e8e', // Dusty Rose
-  accent: '#92a9bd',    // Muted Blue
-  slate: '#4a4a4a',     // Slate Grey
-  cream: '#faf9f6'      // Light Cream
+  bg: '#F2F0E9',       // Oatmeal (bg-main)
+  primary: '#5D7586',  // Smog Blue (Primary Action)
+  secondary: '#C79F98', // Dusty Pink (Accent)
+  accent: '#8C8984',    // Pebble Grey
+  slate: '#3E3C3A',     // Charcoal (Text Main)
+  cream: '#FFFFFF',      // Paper White
+  
+  // Status Helpers
+  successBg: '#E3ECE6',
+  successText: '#4A6356',
+  warningBg: '#F9F1E6',
+  warningText: '#9C7C58'
 };
 
 export const WEEKDAYS = [

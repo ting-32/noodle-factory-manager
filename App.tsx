@@ -47,17 +47,91 @@ import {
   Banknote,
   Share2
 } from 'lucide-react';
+import { motion, AnimatePresence, Variants } from 'framer-motion';
 import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem, CustomerPrice } from './types';
 import { COLORS, WEEKDAYS, GAS_URL as DEFAULT_GAS_URL, UNITS, DELIVERY_METHODS } from './constants';
 
-// --- 設定：預設共用密碼 (若 localStorage 無資料時使用) ---
-const DEFAULT_PASSWORD = "8888";
+// --- Animation Variants ---
+const containerVariants: Variants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.1
+    }
+  }
+};
+
+const itemVariants: Variants = {
+  hidden: { opacity: 0, y: 20, scale: 0.98 },
+  show: { 
+    opacity: 1, 
+    y: 0,
+    scale: 1,
+    transition: { 
+      type: "spring", 
+      stiffness: 260, 
+      damping: 20 
+    } 
+  }
+};
+
+const modalVariants: Variants = {
+  hidden: { opacity: 0, y: "100%" },
+  visible: { 
+    opacity: 1, 
+    y: 0,
+    transition: { type: "spring", damping: 25, stiffness: 300 }
+  },
+  exit: { 
+    opacity: 0, 
+    y: "100%",
+    transition: { duration: 0.2, ease: "easeIn" }
+  }
+};
+
+const buttonTap = { scale: 0.96 };
+const buttonHover = { scale: 1.02 };
+
+// --- 莫蘭迪狀態樣式設定 (Morandi Status Config) ---
+const getStatusStyles = (status: OrderStatus) => {
+  switch (status) {
+    case OrderStatus.PAID:
+      return {
+        cardBg: '#E8F0EB', // 淺豆沙綠 (Light Sage)
+        cardBorder: '#CZDCD4',
+        tagBg: '#BCCFC6',
+        tagText: '#4A6356',
+        iconColor: '#4A6356',
+        label: '已收款'
+      };
+    case OrderStatus.SHIPPED:
+      return {
+        cardBg: '#F7F3E8', // 淺米杏色 (Light Beige/Latte)
+        cardBorder: '#EADBC8',
+        tagBg: '#E0C9A6', 
+        tagText: '#8D7B68',
+        iconColor: '#8D7B68',
+        label: '已出貨'
+      };
+    case OrderStatus.PENDING:
+    default:
+      return {
+        cardBg: '#FFFFFF', // 純白 (White)
+        cardBorder: '#F1F5F9', // Slate-100
+        tagBg: '#F1F5F9', // Slate-100
+        tagText: '#94A3B8', // Slate-400
+        iconColor: '#CBD5E1',
+        label: '待處理'
+      };
+  }
+};
 
 // --- 工具函數 ---
 const normalizeDate = (dateStr: any) => {
   if (!dateStr) return '';
   try {
-    // 嘗試解析日期，處理 yyyy/mm/dd 或 yyyy-mm-dd 或 ISO
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return String(dateStr);
     const y = d.getFullYear();
@@ -82,7 +156,6 @@ const getTomorrowDate = () => {
   return formatDateStr(d);
 };
 
-// 安全解析 JSON 陣列的輔助函數，相容已解析的物件、字串或空值
 const safeJsonArray = (val: any) => {
   if (!val) return [];
   if (Array.isArray(val)) return val;
@@ -100,19 +173,14 @@ const safeJsonArray = (val: any) => {
   return [];
 };
 
-// 格式化配送時間顯示 (用於卡片展示：9:40)
 const formatTimeDisplay = (time: any) => {
   if (!time) return '未設定';
-  
-  // 1. 處理 Date 物件或 ISO 時間字串
   const date = new Date(time);
   if (!isNaN(date.getTime()) && String(time).includes('-')) {
     const h = date.getHours();
     const m = String(date.getMinutes()).padStart(2, '0');
     return `${h}:${m}`;
   }
-  
-  // 2. 處理字串 (HH:mm 或 HH:mm:ss)
   const str = String(time).trim();
   const parts = str.split(':');
   if (parts.length >= 2) {
@@ -122,21 +190,17 @@ const formatTimeDisplay = (time: any) => {
        return `${h}:${m}`;
     }
   }
-  
   return str;
 };
 
-// 格式化配送時間用於 Input [type=time] (必須是 HH:mm，如 09:40)
 const formatTimeForInput = (time: any) => {
   if (!time) return '08:00';
-
   const date = new Date(time);
   if (!isNaN(date.getTime()) && String(time).includes('-')) {
     const h = String(date.getHours()).padStart(2, '0');
     const m = String(date.getMinutes()).padStart(2, '0');
     return `${h}:${m}`;
   }
-
   const str = String(time).trim();
   const parts = str.split(':');
   if (parts.length >= 2) {
@@ -146,76 +210,119 @@ const formatTimeForInput = (time: any) => {
        return `${String(h).padStart(2, '0')}:${m}`;
     }
   }
-
   return '08:00';
 };
 
 // --- 子組件：登入畫面 ---
-const LoginScreen: React.FC<{ onLogin: (password: string) => boolean }> = ({ onLogin }) => {
+const LoginScreen: React.FC<{ onLogin: (password: string) => Promise<boolean> }> = ({ onLogin }) => {
   const [inputVal, setInputVal] = useState('');
   const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const success = onLogin(inputVal);
-    if (!success) {
+    if (!inputVal) return;
+    setLoading(true);
+    setError(false);
+    try {
+      const success = await onLogin(inputVal);
+      if (!success) {
+        setError(true);
+        setInputVal('');
+      }
+    } catch (e) {
       setError(true);
-      setInputVal('');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-[#f4f1ea] p-6 relative overflow-hidden">
-      <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-[#8e9775] rounded-full opacity-10 blur-3xl"></div>
-      <div className="absolute bottom-[-10%] left-[-10%] w-64 h-64 bg-[#e28e8e] rounded-full opacity-10 blur-3xl"></div>
+    <div className="min-h-screen flex flex-col items-center justify-center bg-morandi-oatmeal p-6 relative overflow-hidden font-sans">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5, ease: "easeOut" }}
+        className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-morandi-blue rounded-full opacity-10 blur-3xl" 
+      />
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5, ease: "easeOut", delay: 0.2 }}
+        className="absolute bottom-[-10%] left-[-10%] w-64 h-64 bg-morandi-pink rounded-full opacity-10 blur-3xl" 
+      />
       
-      <div className="bg-white/80 backdrop-blur-md p-8 rounded-[40px] shadow-2xl w-full max-w-sm border border-white animate-in zoom-in duration-500">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="bg-white/80 backdrop-blur-md p-8 rounded-[32px] shadow-lg w-full max-w-sm border border-white/50"
+      >
         <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-[#8e9775] rounded-2xl flex items-center justify-center mx-auto mb-4 text-white shadow-lg rotate-3">
+          <div className="w-16 h-16 bg-morandi-blue rounded-2xl flex items-center justify-center mx-auto mb-4 text-white shadow-lg rotate-3">
              <ClipboardList className="w-8 h-8" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-800 tracking-tight">麵廠職人</h1>
-          <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">系統登入</p>
+          <h1 className="text-3xl font-extrabold text-morandi-charcoal tracking-tight">麵廠職人</h1>
+          <p className="text-xs text-morandi-pebble font-bold uppercase tracking-[0.2em] mt-2">系統登入</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
             <div className="relative">
-              <Lock className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <Lock className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-morandi-pebble" />
               <input 
                 type="password" 
                 placeholder="請輸入系統密碼" 
-                className={`w-full pl-14 pr-6 py-4 bg-gray-50 rounded-[24px] border-2 shadow-inner text-slate-800 font-bold focus:ring-4 focus:ring-[#8e9775]/20 transition-all outline-none ${error ? 'border-rose-200 focus:border-rose-400' : 'border-transparent focus:border-[#8e9775]'}`}
+                className={`w-full pl-14 pr-6 py-4 bg-morandi-oatmeal/50 rounded-[20px] border border-slate-200 text-morandi-charcoal font-bold tracking-wide focus:ring-4 focus:ring-morandi-blue/20 focus:border-morandi-blue transition-all outline-none ${error ? 'border-rose-200 focus:border-rose-400' : ''}`}
                 value={inputVal} 
                 onChange={(e) => { setInputVal(e.target.value); setError(false); }}
                 autoFocus
+                disabled={loading}
               />
             </div>
-            {error && (
-              <div className="flex items-center gap-1.5 px-2 text-rose-500 animate-in slide-in-from-left-2 fade-in">
-                <AlertCircle className="w-3.5 h-3.5" />
-                <span className="text-xs font-bold">密碼錯誤，請重新輸入</span>
-              </div>
-            )}
+            <AnimatePresence>
+              {error && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="flex items-center gap-1.5 px-2 text-rose-500 overflow-hidden"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span className="text-xs font-bold tracking-wide">密碼錯誤，請重新輸入</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           
-          <button 
+          <motion.button 
             type="submit" 
-            className="w-full py-4 rounded-[24px] text-white font-bold shadow-xl transition-all active:scale-95 flex items-center justify-center gap-2"
-            style={{ backgroundColor: COLORS.primary }}
+            disabled={loading}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.96 }}
+            className="w-full py-4 rounded-[20px] bg-morandi-blue text-white font-bold text-lg shadow-md hover:bg-slate-600 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:active:scale-100"
           >
-            進入系統 <ChevronRight className="w-5 h-5" />
-          </button>
+            {loading ? (
+              <>
+                 <Loader2 className="w-5 h-5 animate-spin" /> 驗證中...
+              </>
+            ) : (
+              <>
+                進入系統 <ChevronRight className="w-5 h-5" />
+              </>
+            )}
+          </motion.button>
         </form>
         
-        <div className="mt-8 text-center">
-          <p className="text-[10px] text-gray-300">© 2025 Noodle Factory Manager</p>
+        <div className="mt-10 text-center">
+          <p className="text-[10px] text-morandi-pebble tracking-wide">© 2025 Noodle Factory Manager</p>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
 
+// ... (ConfirmModal, HolidayCalendar, WorkCalendar, DatePickerModal, SettingsModal, NavItem components remain unchanged) ...
 // --- 子組件：自訂確認視窗 ---
 const ConfirmModal: React.FC<{
   isOpen: boolean;
@@ -224,34 +331,49 @@ const ConfirmModal: React.FC<{
   onConfirm: () => void;
   onCancel: () => void;
 }> = ({ isOpen, title, message, onConfirm, onCancel }) => {
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-6 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-xs rounded-[32px] overflow-hidden shadow-2xl animate-in zoom-in duration-200">
-        <div className="p-6 text-center space-y-4">
-          <div className="w-14 h-14 bg-rose-50 rounded-full flex items-center justify-center mx-auto text-rose-500 mb-2">
-            <AlertTriangle className="w-7 h-7" />
-          </div>
-          <h3 className="text-lg font-bold text-gray-800">{title}</h3>
-          <p className="text-xs text-gray-500 font-bold leading-relaxed px-2">{message}</p>
-        </div>
-        <div className="p-4 flex gap-3 bg-gray-50/50">
-          <button 
-            onClick={onCancel} 
-            className="flex-1 py-3 rounded-[20px] font-bold text-gray-400 bg-white shadow-sm border border-gray-100 hover:bg-gray-50 transition-colors"
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-morandi-charcoal/40 z-[110] flex items-center justify-center p-6 backdrop-blur-sm"
+        >
+          <motion.div 
+            variants={modalVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="bg-morandi-paper w-full max-w-xs rounded-[24px] overflow-hidden shadow-xl border border-white/50"
           >
-            取消
-          </button>
-          <button 
-            onClick={onConfirm} 
-            className="flex-1 py-3 rounded-[20px] font-bold text-white shadow-lg bg-rose-500 hover:bg-rose-600 active:scale-95 transition-all"
-          >
-            確認刪除
-          </button>
-        </div>
-      </div>
-    </div>
+            <div className="p-6 text-center space-y-4">
+              <div className="w-14 h-14 bg-rose-50 rounded-full flex items-center justify-center mx-auto text-rose-400 mb-2">
+                <AlertTriangle className="w-7 h-7" />
+              </div>
+              <h3 className="text-xl font-extrabold text-morandi-charcoal tracking-tight">{title}</h3>
+              <p className="text-sm text-morandi-pebble font-medium leading-relaxed tracking-wide px-2">{message}</p>
+            </div>
+            <div className="p-4 flex gap-3 bg-morandi-oatmeal/30">
+              <motion.button 
+                whileTap={buttonTap}
+                onClick={onCancel} 
+                className="flex-1 py-3 rounded-[16px] font-bold text-morandi-pebble bg-white shadow-sm border border-slate-200 tracking-wide"
+              >
+                取消
+              </motion.button>
+              <motion.button 
+                whileTap={buttonTap}
+                onClick={onConfirm} 
+                className="flex-1 py-3 rounded-[16px] font-bold text-white shadow-md bg-rose-400 tracking-wide"
+              >
+                確認刪除
+              </motion.button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
 
@@ -281,56 +403,61 @@ const HolidayCalendar: React.FC<{
   }, [viewDate]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-white w-full max-w-sm rounded-[40px] overflow-hidden shadow-2xl animate-in zoom-in duration-200">
-        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-[#faf9f6]">
+    <div className="fixed inset-0 bg-morandi-charcoal/40 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.9 }}
+        transition={{ type: "spring", duration: 0.3 }}
+        className="bg-white w-full max-w-sm rounded-[32px] overflow-hidden shadow-xl border border-slate-200"
+      >
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-morandi-oatmeal/30">
           <div>
-            <h3 className="font-bold text-gray-800">{storeName}</h3>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">特定公休日編輯</p>
+            <h3 className="font-extrabold text-morandi-charcoal text-lg tracking-tight">{storeName}</h3>
+            <p className="text-[10px] text-morandi-pebble font-bold uppercase tracking-widest mt-0.5">特定公休日編輯</p>
           </div>
-          <button onClick={onClose} className="p-2 bg-white rounded-2xl shadow-sm"><X className="w-5 h-5 text-gray-400" /></button>
+          <button onClick={onClose} className="p-2 bg-white rounded-2xl shadow-sm border border-slate-100 text-morandi-pebble hover:text-morandi-charcoal"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-6">
           <div className="flex justify-between items-center mb-6">
-            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 bg-gray-50 rounded-xl"><ChevronLeft className="w-6 h-6 text-gray-300" /></button>
-            <h4 className="font-bold text-gray-700">{viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月</h4>
-            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 bg-gray-50 rounded-xl"><ChevronRight className="w-6 h-6 text-gray-300" /></button>
+            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 bg-morandi-oatmeal rounded-xl"><ChevronLeft className="w-6 h-6 text-morandi-pebble" /></button>
+            <h4 className="font-bold text-morandi-charcoal">{viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月</h4>
+            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 bg-morandi-oatmeal rounded-xl"><ChevronRight className="w-6 h-6 text-morandi-pebble" /></button>
           </div>
           <div className="grid grid-cols-7 gap-2 text-center">
             {WEEKDAYS.map(d => (
-              <div key={d.value} className="text-[10px] font-bold text-gray-300 uppercase py-2">{d.label}</div>
+              <div key={d.value} className="text-[10px] font-bold text-morandi-pebble uppercase py-2">{d.label}</div>
             ))}
             {calendarDays.map((item, idx) => {
               const isHoliday = item.dateStr && holidays.includes(item.dateStr);
               return (
-                <div 
+                <motion.div 
                   key={idx} 
+                  whileTap={{ scale: 0.8 }}
                   onClick={() => item.dateStr && onToggle(item.dateStr)}
-                  className={`aspect-square flex items-center justify-center text-sm rounded-xl cursor-pointer transition-all border ${!item.day ? 'opacity-0 pointer-events-none' : 'hover:scale-105 active:scale-90'} ${isHoliday ? 'bg-rose-50 border-rose-100 text-rose-500 font-bold' : 'bg-white border-transparent text-gray-600'}`}
+                  className={`aspect-square flex items-center justify-center text-sm font-medium rounded-xl cursor-pointer transition-colors border ${!item.day ? 'opacity-0 pointer-events-none' : ''} ${isHoliday ? 'bg-rose-50 border-rose-200 text-rose-500 font-bold' : 'bg-white border-transparent text-morandi-charcoal hover:bg-morandi-oatmeal'}`}
                 >
                   {item.day}
-                </div>
+                </motion.div>
               );
             })}
           </div>
         </div>
-        <div className="p-6 bg-[#faf9f6] flex justify-end">
-          <button onClick={onClose} className="px-8 py-4 rounded-[20px] text-white font-bold shadow-lg" style={{ backgroundColor: COLORS.primary }}>完成設定</button>
+        <div className="p-6 bg-morandi-oatmeal/30 flex justify-end">
+          <motion.button whileTap={buttonTap} onClick={onClose} className="px-8 py-3 rounded-[16px] bg-morandi-blue text-white font-bold shadow-lg tracking-wide">完成設定</motion.button>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
 
-// --- 子組件：工作小抄專用嵌入式月曆 (支援多選) ---
+// --- 子組件：工作小抄專用嵌入式月曆 ---
 const WorkCalendar: React.FC<{ 
   selectedDate: string | string[]; 
   onSelect: (date: any) => void;
   orders: Order[];
 }> = ({ selectedDate, onSelect, orders }) => {
-  // Determine if we are in multi-select mode based on prop type
   const isMulti = Array.isArray(selectedDate);
-  // Base date for view: use first selected date or today
   const baseDateStr = isMulti ? (selectedDate[0] || getTomorrowDate()) : (selectedDate as string);
 
   const parseLocalDate = (dateStr: string) => {
@@ -375,15 +502,15 @@ const WorkCalendar: React.FC<{
   };
 
   return (
-    <div className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
+    <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-200">
       <div className="flex justify-between items-center mb-4">
-        <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 bg-gray-50 rounded-xl"><ChevronLeft className="w-5 h-5 text-gray-400" /></button>
-        <h4 className="font-bold text-slate-700 text-sm">{viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月</h4>
-        <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 bg-gray-50 rounded-xl"><ChevronRight className="w-5 h-5 text-gray-400" /></button>
+        <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 bg-morandi-oatmeal rounded-xl"><ChevronLeft className="w-5 h-5 text-morandi-pebble" /></button>
+        <h4 className="font-bold text-morandi-charcoal text-sm tracking-wide">{viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月</h4>
+        <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 bg-morandi-oatmeal rounded-xl"><ChevronRight className="w-5 h-5 text-morandi-pebble" /></button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center">
         {WEEKDAYS.map(d => (
-          <div key={d.value} className="text-[10px] font-bold text-gray-300 uppercase py-2">{d.label}</div>
+          <div key={d.value} className="text-[10px] font-bold text-morandi-pebble uppercase py-2">{d.label}</div>
         ))}
         {calendarDays.map((item, idx) => {
           const isSelected = isMulti 
@@ -392,11 +519,11 @@ const WorkCalendar: React.FC<{
             
           const hasOrder = item.dateStr && datesWithOrders.has(item.dateStr);
           return (
-            <div 
+            <motion.div 
               key={idx} 
+              whileTap={{ scale: 0.9 }}
               onClick={() => item.dateStr && handleDateClick(item.dateStr)}
-              className={`aspect-square flex flex-col items-center justify-center text-sm rounded-xl cursor-pointer transition-all border relative ${!item.day ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-50'} ${isSelected ? 'text-white font-bold shadow-md' : 'bg-white border-transparent text-gray-600'}`}
-              style={{ backgroundColor: isSelected ? COLORS.primary : '' }}
+              className={`aspect-square flex flex-col items-center justify-center text-sm font-medium rounded-xl cursor-pointer transition-colors border relative ${!item.day ? 'opacity-0 pointer-events-none' : 'hover:bg-morandi-oatmeal'} ${isSelected ? 'bg-morandi-blue text-white font-bold shadow-md' : 'bg-white border-transparent text-morandi-charcoal'}`}
             >
               <span className="z-10">{item.day}</span>
               {hasOrder && !isSelected && (
@@ -405,7 +532,7 @@ const WorkCalendar: React.FC<{
               {hasOrder && isSelected && (
                 <span className="w-1 h-1 rounded-full bg-white/60 absolute bottom-2"></span>
               )}
-            </div>
+            </motion.div>
           );
         })}
       </div>
@@ -441,38 +568,44 @@ const DatePickerModal: React.FC<{
   }, [viewDate]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
-      <div className="bg-white w-full max-w-sm rounded-t-[40px] sm:rounded-[40px] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300">
-        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-[#faf9f6]">
-          <h3 className="font-bold text-gray-800">選擇配送日期</h3>
-          <button onClick={onClose} className="p-2 bg-white rounded-2xl shadow-sm"><X className="w-5 h-5 text-gray-400" /></button>
+    <div className="fixed inset-0 bg-morandi-charcoal/40 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
+      <motion.div 
+        variants={modalVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="bg-white w-full max-w-sm rounded-t-[32px] sm:rounded-[32px] overflow-hidden shadow-xl"
+      >
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-morandi-oatmeal/30">
+          <h3 className="font-extrabold text-morandi-charcoal text-lg tracking-tight">選擇配送日期</h3>
+          <button onClick={onClose} className="p-2 bg-white rounded-2xl shadow-sm border border-slate-100"><X className="w-5 h-5 text-morandi-pebble" /></button>
         </div>
         <div className="p-6">
           <div className="flex justify-between items-center mb-6">
-            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 bg-gray-50 rounded-xl"><ChevronLeft className="w-6 h-6 text-gray-300" /></button>
-            <h4 className="font-bold text-gray-700">{viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月</h4>
-            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 bg-gray-50 rounded-xl"><ChevronRight className="w-6 h-6 text-gray-300" /></button>
+            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 bg-morandi-oatmeal rounded-xl"><ChevronLeft className="w-6 h-6 text-morandi-pebble" /></button>
+            <h4 className="font-bold text-morandi-charcoal">{viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月</h4>
+            <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 bg-morandi-oatmeal rounded-xl"><ChevronRight className="w-6 h-6 text-morandi-pebble" /></button>
           </div>
           <div className="grid grid-cols-7 gap-2 text-center">
             {WEEKDAYS.map(d => (
-              <div key={d.value} className="text-[10px] font-bold text-gray-300 uppercase py-2">{d.label}</div>
+              <div key={d.value} className="text-[10px] font-bold text-morandi-pebble uppercase py-2">{d.label}</div>
             ))}
             {calendarDays.map((item, idx) => {
               const isSelected = item.dateStr === selectedDate;
               return (
-                <div 
+                <motion.div 
                   key={idx} 
+                  whileTap={{ scale: 0.8 }}
                   onClick={() => item.dateStr && (onSelect(item.dateStr), onClose())}
-                  className={`aspect-square flex items-center justify-center text-sm rounded-xl cursor-pointer transition-all border ${!item.day ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-50 active:scale-90'} ${isSelected ? 'text-white font-bold' : 'bg-white border-transparent text-gray-600'}`}
-                  style={{ backgroundColor: isSelected ? COLORS.primary : '' }}
+                  className={`aspect-square flex items-center justify-center text-sm font-medium rounded-xl cursor-pointer transition-all border ${!item.day ? 'opacity-0 pointer-events-none' : 'hover:bg-morandi-oatmeal'} ${isSelected ? 'bg-morandi-blue text-white font-bold' : 'bg-white border-transparent text-morandi-charcoal'}`}
                 >
                   {item.day}
-                </div>
+                </motion.div>
               );
             })}
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
@@ -481,17 +614,17 @@ const DatePickerModal: React.FC<{
 const SettingsModal: React.FC<{
   onClose: () => void;
   onSync: () => void;
-  onSavePassword: (oldPwd: string, newPwd: string) => boolean;
+  onSavePassword: (oldPwd: string, newPwd: string) => Promise<boolean>;
   currentUrl: string;
   onSaveUrl: (newUrl: string) => void;
 }> = ({ onClose, onSync, onSavePassword, currentUrl, onSaveUrl }) => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [inputUrl, setInputUrl] = useState(currentUrl);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'success'>('idle');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [urlSaveStatus, setUrlSaveStatus] = useState<'idle' | 'success'>('idle');
 
-  const handlePasswordSubmit = () => {
+  const handlePasswordSubmit = async () => {
     if (!oldPassword) {
       alert('請輸入原密碼');
       return;
@@ -500,14 +633,22 @@ const SettingsModal: React.FC<{
       alert('新密碼長度請至少輸入 4 碼');
       return;
     }
-    const success = onSavePassword(oldPassword, newPassword);
-    if (success) {
-      setSaveStatus('success');
-      setOldPassword('');
-      setNewPassword('');
-      setTimeout(() => setSaveStatus('idle'), 2000);
-    } else {
-      alert('原密碼錯誤，無法變更密碼');
+    
+    setSaveStatus('loading');
+    try {
+      const success = await onSavePassword(oldPassword, newPassword);
+      if (success) {
+        setSaveStatus('success');
+        setOldPassword('');
+        setNewPassword('');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } else {
+        setSaveStatus('error');
+        alert('原密碼錯誤，無法變更密碼');
+      }
+    } catch (e) {
+      setSaveStatus('error');
+      alert('變更密碼失敗，請檢查網路連線');
     }
   };
 
@@ -522,101 +663,113 @@ const SettingsModal: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
-      <div className="bg-white w-full max-w-sm rounded-t-[40px] sm:rounded-[40px] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300 h-[85vh] sm:h-auto overflow-y-auto">
-        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-[#faf9f6] sticky top-0 z-10">
+    <div className="fixed inset-0 bg-morandi-charcoal/40 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
+      <motion.div 
+        variants={modalVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="bg-white w-full max-w-sm rounded-t-[32px] sm:rounded-[32px] overflow-hidden shadow-xl h-[85vh] sm:h-auto overflow-y-auto"
+      >
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-morandi-oatmeal/30 sticky top-0 z-10">
           <div>
-            <h3 className="font-bold text-gray-800">系統設定</h3>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">Settings</p>
+            <h3 className="font-extrabold text-morandi-charcoal text-lg tracking-tight">系統設定</h3>
+            <p className="text-[10px] text-morandi-pebble font-bold uppercase tracking-widest mt-0.5">Settings</p>
           </div>
-          <button onClick={onClose} className="p-2 bg-white rounded-2xl shadow-sm"><X className="w-5 h-5 text-gray-400" /></button>
+          <button onClick={onClose} className="p-2 bg-white rounded-2xl shadow-sm text-morandi-pebble border border-slate-100"><X className="w-5 h-5" /></button>
         </div>
         
         <div className="p-6 space-y-8">
           <section className="space-y-3">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><RefreshCw className="w-4 h-4" /> 資料同步</h4>
-            <div className="bg-gray-50 p-5 rounded-[24px]">
-               <p className="text-xs text-slate-500 mb-4 font-bold leading-relaxed">
+            <h4 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-2"><RefreshCw className="w-4 h-4" /> 資料同步</h4>
+            <div className="bg-morandi-oatmeal/50 p-5 rounded-[24px] border border-slate-100">
+               <p className="text-xs text-morandi-charcoal/80 mb-4 font-bold leading-relaxed tracking-wide">
                  若發現資料與雲端不同步（例如其他裝置已更新），可點擊下方按鈕強制重新讀取。
                </p>
-               <button 
+               <motion.button 
+                 whileTap={buttonTap}
                  onClick={() => { onSync(); onClose(); }}
-                 className="w-full py-4 rounded-[20px] bg-slate-700 text-white font-bold flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all"
+                 className="w-full py-4 rounded-[16px] bg-slate-600 text-white font-bold flex items-center justify-center gap-2 shadow-lg tracking-wide"
                >
                  <RefreshCw className="w-5 h-5" /> 強制同步雲端資料
-               </button>
+               </motion.button>
             </div>
           </section>
 
           <section className="space-y-3">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><LinkIcon className="w-4 h-4" /> 伺服器連線 (GAS URL)</h4>
-            <div className="bg-gray-50 p-5 rounded-[24px] space-y-4">
-              <p className="text-[10px] text-slate-400 font-bold leading-relaxed">
+            <h4 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-2"><LinkIcon className="w-4 h-4" /> 伺服器連線 (GAS URL)</h4>
+            <div className="bg-morandi-oatmeal/50 p-5 rounded-[24px] space-y-4 border border-slate-100">
+              <p className="text-[10px] text-morandi-charcoal/60 font-bold leading-relaxed tracking-wide">
                 請將您 Google Apps Script 部署後的 Web App URL 貼於此處，以確保資料正確寫入您的試算表。
               </p>
               <textarea 
-                className="w-full p-3 rounded-2xl border-none text-[10px] text-slate-600 font-mono bg-white h-20 resize-none outline-none focus:ring-2 focus:ring-[#8e9775] shadow-sm"
+                className="w-full p-3 rounded-2xl border border-slate-200 text-[10px] text-slate-600 font-mono bg-white h-20 resize-none outline-none focus:ring-2 focus:ring-morandi-blue shadow-sm"
                 placeholder="https://script.google.com/macros/s/..."
                 value={inputUrl}
                 onChange={(e) => setInputUrl(e.target.value)}
               />
-              <button 
+              <motion.button 
+                 whileTap={buttonTap}
                  onClick={handleUrlSubmit}
-                 className={`w-full py-3 rounded-[20px] font-bold flex items-center justify-center gap-2 transition-all ${urlSaveStatus === 'success' ? 'bg-green-500 text-white' : 'bg-white text-slate-600 shadow-sm'}`}
+                 className={`w-full py-3 rounded-[16px] font-bold flex items-center justify-center gap-2 transition-all tracking-wide ${urlSaveStatus === 'success' ? 'bg-morandi-green-text text-white' : 'bg-white text-slate-600 shadow-sm border border-slate-200'}`}
                >
                  {urlSaveStatus === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
                  {urlSaveStatus === 'success' ? '網址已更新' : '儲存連線網址'}
-               </button>
+               </motion.button>
             </div>
           </section>
 
           <section className="space-y-3">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><Lock className="w-4 h-4" /> 安全性設定</h4>
-            <div className="bg-gray-50 p-5 rounded-[24px] space-y-4">
+            <h4 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-2"><Lock className="w-4 h-4" /> 安全性設定</h4>
+            <div className="bg-morandi-oatmeal/50 p-5 rounded-[24px] space-y-4 border border-slate-100">
                <div className="space-y-3">
                  <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-gray-400 pl-1">原密碼</label>
+                   <label className="text-[10px] font-bold text-morandi-pebble pl-1">原密碼</label>
                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-morandi-pebble" />
                       <input 
                         type="password" 
                         placeholder="輸入目前密碼" 
-                        className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-slate-800 font-bold text-sm border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all"
+                        className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-morandi-charcoal font-bold text-sm border border-slate-200 outline-none focus:ring-2 focus:ring-morandi-blue transition-all tracking-wide"
                         value={oldPassword}
                         onChange={(e) => setOldPassword(e.target.value)}
+                        disabled={saveStatus === 'loading'}
                       />
                    </div>
                  </div>
                  <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-gray-400 pl-1">新密碼</label>
+                   <label className="text-[10px] font-bold text-morandi-pebble pl-1">新密碼</label>
                    <div className="relative">
-                      <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-morandi-pebble" />
                       <input 
                         type="text" 
                         placeholder="輸入新密碼" 
-                        className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-slate-800 font-bold text-sm border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all"
+                        className="w-full pl-10 pr-4 py-3 bg-white rounded-2xl text-morandi-charcoal font-bold text-sm border border-slate-200 outline-none focus:ring-2 focus:ring-morandi-blue transition-all tracking-wide"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
+                        disabled={saveStatus === 'loading'}
                       />
                    </div>
                  </div>
                </div>
-               <button 
+               <motion.button 
+                 whileTap={buttonTap}
                  onClick={handlePasswordSubmit}
-                 className={`w-full py-3 rounded-[20px] font-bold flex items-center justify-center gap-2 transition-all ${saveStatus === 'success' ? 'bg-green-500 text-white' : 'bg-white text-slate-600 shadow-sm'}`}
+                 disabled={saveStatus === 'loading'}
+                 className={`w-full py-3 rounded-[16px] font-bold flex items-center justify-center gap-2 transition-all tracking-wide ${saveStatus === 'success' ? 'bg-morandi-green-text text-white' : 'bg-white text-slate-600 shadow-sm border border-slate-200'} ${saveStatus === 'loading' ? 'opacity-70' : ''}`}
                >
-                 {saveStatus === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-                 {saveStatus === 'success' ? '密碼已更新' : '儲存新密碼'}
-               </button>
+                 {saveStatus === 'success' ? <CheckCircle2 className="w-4 h-4" /> : saveStatus === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                 {saveStatus === 'success' ? '密碼已更新' : saveStatus === 'loading' ? '更新中...' : '儲存新密碼'}
+               </motion.button>
             </div>
           </section>
 
           <div className="text-center pt-4 border-t border-gray-100">
-             <p className="text-[10px] text-gray-300 font-bold">Noodle Factory Manager v1.6</p>
+             <p className="text-[10px] text-morandi-pebble font-bold tracking-wide">Noodle Factory Manager v1.7 (Secured)</p>
           </div>
 
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
@@ -629,36 +782,34 @@ const NavItem: React.FC<{
   icon: React.ReactNode;
   label: string;
 }> = ({ active, onClick, icon, label }) => (
-  <button 
+  <motion.button 
     onClick={onClick} 
+    whileTap={{ scale: 0.9 }}
     className={`group flex flex-col items-center justify-center w-full transition-all duration-300 ${active ? '-translate-y-1' : 'opacity-40 hover:opacity-70'}`}
   >
-    <div 
-      className={`w-12 h-12 rounded-[20px] flex items-center justify-center mb-1 transition-all duration-300 ${active ? 'text-white shadow-xl' : 'text-slate-400 group-hover:bg-gray-50'}`}
+    <motion.div 
+      className={`w-12 h-12 rounded-[20px] flex items-center justify-center mb-1 transition-all duration-300 ${active ? 'text-white shadow-lg' : 'text-morandi-pebble group-hover:bg-morandi-oatmeal/50'}`}
       style={{ 
         backgroundColor: active ? COLORS.primary : 'transparent',
-        boxShadow: active ? `0 8px 16px -4px ${COLORS.primary}50` : 'none'
+      }}
+      animate={{ 
+        scale: active ? 1.1 : 1,
+        backgroundColor: active ? COLORS.primary : 'rgba(0,0,0,0)'
       }}
     >
       {icon}
-    </div>
-    <span className={`text-[10px] font-bold tracking-widest transition-colors ${active ? 'text-slate-800' : 'text-gray-300'}`}>
+    </motion.div>
+    <span className={`text-[10px] font-bold tracking-widest transition-colors ${active ? 'text-morandi-charcoal' : 'text-morandi-pebble'}`}>
       {label}
     </span>
-  </button>
+  </motion.button>
 );
 
 
 // --- 主要 App 組件 ---
 const App: React.FC = () => {
-  // --- 認證狀態 ---
+  // ... (保留與之前相同的 State 和邏輯) ...
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState(() => {
-    if (typeof window !== 'undefined') return localStorage.getItem('nm_app_password') || DEFAULT_PASSWORD;
-    return DEFAULT_PASSWORD;
-  });
-
-  // --- API 設定 ---
   const [apiEndpoint, setApiEndpoint] = useState(() => {
     if (typeof window !== 'undefined') return localStorage.getItem('nm_gas_url') || DEFAULT_GAS_URL;
     return DEFAULT_GAS_URL;
@@ -681,15 +832,13 @@ const App: React.FC = () => {
     return getTomorrowDate();
   });
 
-  // 工作小抄專用狀態 - 改為陣列支援多天選擇
   const [workDates, setWorkDates] = useState<string[]>([getTomorrowDate()]);
   const [workCustomerFilter, setWorkCustomerFilter] = useState('');
   const [workProductFilter, setWorkProductFilter] = useState<string[]>([]);
   const [workDeliveryMethodFilter, setWorkDeliveryMethodFilter] = useState<string[]>([]);
   
-  // 行程表專用狀態
   const [scheduleDate, setScheduleDate] = useState<string>(getTomorrowDate());
-  const [scheduleDeliveryMethodFilter, setScheduleDeliveryMethodFilter] = useState<string[]>([]); // 新增：行程配送方式篩選
+  const [scheduleDeliveryMethodFilter, setScheduleDeliveryMethodFilter] = useState<string[]>([]);
 
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
@@ -697,16 +846,12 @@ const App: React.FC = () => {
   const [holidayEditorId, setHolidayEditorId] = useState<string | null>(null);
 
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
-  
-  // Quick Add State updated to include 'unit'
   const [quickAddData, setQuickAddData] = useState<{customerName: string, productId: string, quantity: number, unit: string} | null>(null);
 
-  // 新增：暫存價目表設定
   const [tempPriceProdId, setTempPriceProdId] = useState('');
   const [tempPriceValue, setTempPriceValue] = useState('');
   const [tempPriceUnit, setTempPriceUnit] = useState('斤');
 
-  // --- 確認對話框狀態 ---
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
     title: string;
@@ -743,21 +888,18 @@ const App: React.FC = () => {
   const [productForm, setProductForm] = useState<Partial<Product>>({});
   const [customerSearch, setCustomerSearch] = useState('');
 
-  // ------------------ 訂單總結與金額計算 (useMemo) ------------------
+  // ... (保留 useMemo 和運算邏輯) ...
   const orderSummary = useMemo(() => {
     const customer = customers.find(c => c.id === orderForm.customerId);
     let totalPrice = 0;
-    
     const details = orderForm.items.map(item => {
         const product = products.find(p => p.id === item.productId);
         const priceItem = customer?.priceList?.find(pl => pl.productId === item.productId);
         const unitPrice = priceItem ? priceItem.price : (product?.price || 0); 
-
         let displayQty = item.quantity;
         let displayUnit = item.unit || '斤';
         let subtotal = 0;
         let isCalculated = false;
-
         if (item.unit === '元') {
              subtotal = item.quantity;
              if (unitPrice > 0) {
@@ -768,30 +910,16 @@ const App: React.FC = () => {
                  displayQty = 0;
              }
         } else {
-             // 四捨五入計算
              subtotal = Math.round(item.quantity * unitPrice);
              displayQty = item.quantity;
              displayUnit = item.unit || '斤';
         }
-
         totalPrice += subtotal;
-        
-        return { 
-          name: product?.name || '未選品項', 
-          rawQty: item.quantity,
-          rawUnit: item.unit,
-          displayQty, 
-          displayUnit, 
-          subtotal,
-          unitPrice,
-          isCalculated
-        };
+        return { name: product?.name || '未選品項', rawQty: item.quantity, rawUnit: item.unit, displayQty, displayUnit, subtotal, unitPrice, isCalculated };
     });
-
     return { totalPrice, details };
   }, [orderForm.items, orderForm.customerId, customers, products]);
 
-  // --- 計算單張訂單的總金額 (用於行程列表) ---
   const calculateOrderTotalAmount = (order: Order) => {
     const customer = customers.find(c => c.name === order.customerName);
     let total = 0;
@@ -799,7 +927,6 @@ const App: React.FC = () => {
       const product = products.find(p => p.id === item.productId || p.name === item.productId);
       const priceItem = customer?.priceList?.find(pl => pl.productId === (product?.id || item.productId));
       const unitPrice = priceItem ? priceItem.price : (product?.price || 0);
-      
       if (item.unit === '元') {
         total += item.quantity;
       } else {
@@ -809,28 +936,22 @@ const App: React.FC = () => {
     return total;
   };
 
-  // --- 計算追加訂單的預覽價格 (優化：支援金額反推數量) ---
   const getQuickAddPricePreview = () => {
     if (!quickAddData || !quickAddData.productId) return null;
     const product = products.find(p => p.id === quickAddData.productId);
     const customer = customers.find(c => c.name === quickAddData.customerName);
     if (!product || !customer) return null;
-
-    // Price lookup
     const priceItem = customer.priceList?.find(pl => pl.productId === product.id);
     const unitPrice = priceItem ? priceItem.price : (product.price || 0);
-
     let total = 0;
     let formula = '';
     let isCurrencyInput = quickAddData.unit === '元';
     let convertedDisplay = '';
-
     if (isCurrencyInput) {
-        total = quickAddData.quantity; // Input is money
+        total = quickAddData.quantity; 
         if (unitPrice > 0) {
-            // Calculate quantity: Total / Unit Price
             const qty = (quickAddData.quantity / unitPrice);
-            const displayQty = parseFloat(qty.toFixed(2)); // Clean trailing zeros
+            const displayQty = parseFloat(qty.toFixed(2)); 
             const baseUnit = product.unit || '斤';
             formula = `單價 $${unitPrice}`;
             convertedDisplay = `${displayQty} ${baseUnit}`;
@@ -842,17 +963,13 @@ const App: React.FC = () => {
         total = Math.round(quickAddData.quantity * unitPrice);
         formula = `$${unitPrice} x ${quickAddData.quantity}${quickAddData.unit}`;
     }
-
     return { total, formula, unitPrice, isCurrencyInput, convertedDisplay };
   };
 
-  // --- 行程列表 (包含篩選邏輯) ---
   const scheduleOrders = useMemo(() => {
     return orders
       .filter(o => {
         if (o.deliveryDate !== scheduleDate) return false;
-        
-        // 配送方式篩選
         if (scheduleDeliveryMethodFilter.length > 0) {
            const customer = customers.find(c => c.name === o.customerName);
            const method = o.deliveryMethod || customer?.deliveryMethod || '';
@@ -865,11 +982,9 @@ const App: React.FC = () => {
       });
   }, [orders, scheduleDate, scheduleDeliveryMethodFilter, customers]);
 
-  // --- 計算行程頁面的收款統計 ---
   const scheduleMoneySummary = useMemo(() => {
     let totalReceivable = 0;
     let totalCollected = 0;
-    
     scheduleOrders.forEach(order => {
       const amount = calculateOrderTotalAmount(order);
       totalReceivable += amount;
@@ -877,23 +992,20 @@ const App: React.FC = () => {
         totalCollected += amount;
       }
     });
-    
     return { totalReceivable, totalCollected };
   }, [scheduleOrders, customers, products]);
 
-  // --- 複製訂單內容功能 ---
+  // ... (保留 handleCopyOrder, handleShareOrder, openGoogleMaps 等工具函數) ...
   const handleCopyOrder = (custName: string, orders: Order[]) => {
     const customer = customers.find(c => c.name === custName);
     let totalAmount = 0;
     const lines = [`📅 訂單日期: ${selectedDate}`, `👤 客戶: ${custName}`];
     lines.push('----------------');
-    
     orders.forEach(o => {
       o.items.forEach(item => {
         const p = products.find(prod => prod.id === item.productId);
         const pName = p?.name || item.productId;
         const unit = item.unit || p?.unit || '斤';
-        
         let itemPrice = 0;
         if (unit === '元') {
            itemPrice = item.quantity;
@@ -903,67 +1015,46 @@ const App: React.FC = () => {
            itemPrice = Math.round(item.quantity * uPrice);
         }
         totalAmount += itemPrice;
-        
         lines.push(`- ${pName}: ${item.quantity}${unit}`);
       });
     });
-    
     lines.push('----------------');
     lines.push(`💰 總金額: $${totalAmount.toLocaleString()}`);
     if (orders[0]?.note) lines.push(`📝 備註: ${orders[0].note}`);
-    
-    navigator.clipboard.writeText(lines.join('\n')).then(() => {
-       alert('訂單內容已複製！可直接貼上 Line 或簡訊。');
-    });
+    navigator.clipboard.writeText(lines.join('\n')).then(() => { alert('訂單內容已複製！可直接貼上 Line 或簡訊。'); });
   };
 
-  // --- 分享單筆訂單功能 (Share API) ---
   const handleShareOrder = async (order: Order) => {
     const customer = customers.find(c => c.name === order.customerName);
     const totalAmount = calculateOrderTotalAmount(order);
-    
-    // Build text
     let text = `🚚 配送單 [${order.deliveryDate}]\n`;
     text += `----------------\n`;
     text += `👤 客戶: ${order.customerName}\n`;
     if (customer?.phone) text += `📞 電話: ${customer.phone}\n`;
     text += `⏰ 時間: ${formatTimeDisplay(order.deliveryTime)}\n`;
     if (order.deliveryMethod) text += `🛵 方式: ${order.deliveryMethod}\n`;
-    
     text += `\n📦 品項:\n`;
     order.items.forEach(item => {
        const p = products.find(prod => prod.id === item.productId || prod.name === item.productId);
        text += `- ${p?.name || item.productId}: ${item.quantity} ${item.unit}\n`;
     });
-    
     if (order.note) text += `\n📝 備註: ${order.note}\n`;
     text += `----------------\n`;
     text += `💰 總金額: $${totalAmount.toLocaleString()}`;
-
-    // Execute Share
     if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `配送單 - ${order.customerName}`,
-          text: text
-        });
-      } catch (err) {
-        console.log('Share canceled');
-      }
+      try { await navigator.share({ title: `配送單 - ${order.customerName}`, text: text }); } catch (err) { console.log('Share canceled'); }
     } else {
-      // Fallback
       navigator.clipboard.writeText(text);
       alert('配送資訊已複製！');
     }
   };
 
-  // --- Google Maps 導航功能 ---
   const openGoogleMaps = (name: string) => {
-    // 簡單使用名稱搜尋，若有地址欄位可改用地址
     const query = encodeURIComponent(name);
     window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank');
   };
 
+  // ... (保留 useEffect, syncData 等邏輯) ...
   useEffect(() => {
     const authStatus = localStorage.getItem('nm_auth_status');
     if (authStatus === 'true') {
@@ -975,23 +1066,15 @@ const App: React.FC = () => {
     localStorage.setItem('nm_selected_date', selectedDate);
   }, [selectedDate]);
 
-  // ------------------ 雲端資料同步讀取 (使用 apiEndpoint) ------------------
   const syncData = async () => {
-    if (!apiEndpoint) {
-      setIsInitialLoading(false);
-      return;
-    }
-    
+    if (!apiEndpoint) { setIsInitialLoading(false); return; }
     setIsInitialLoading(true);
-
     try {
       const res = await fetch(`${apiEndpoint}?type=init`);
       const result: GASResponse<any> = await res.json();
-      
       if (result.success && result.data) {
         const mappedCustomers: Customer[] = (result.data.customers || []).map((c: any) => {
           const priceListKey = Object.keys(c).find(k => k.includes('價目表') || k.includes('Price') || k.includes('priceList')) || '價目表JSON';
-          
           return {
             id: String(c.ID || c.id || ''),
             name: c.客戶名稱 || c.name || '',
@@ -999,23 +1082,12 @@ const App: React.FC = () => {
             deliveryTime: c.配送時間 || c.deliveryTime || '',
             deliveryMethod: c.配送方式 || c.deliveryMethod || '', 
             defaultItems: safeJsonArray(c.預設品項JSON || c.預設品項 || c.defaultItems),
-            priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({
-              productId: pl.productId,
-              price: Number(pl.price) || 0,
-              unit: pl.unit || '斤'
-            })),
+            priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({ productId: pl.productId, price: Number(pl.price) || 0, unit: pl.unit || '斤' })),
             offDays: safeJsonArray(c.公休日週期JSON || c.公休日週期 || c.offDays),
             holidayDates: safeJsonArray(c.特定公休日JSON || c.特定公休日 || c.holidayDates)
           };
         });
-
-        const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({
-          id: String(p.ID || p.id),
-          name: p.品項 || p.name,
-          unit: p.單位 || p.unit,
-          price: Number(p.單價 || p.price) || 0 
-        }));
-
+        const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({ id: String(p.ID || p.id), name: p.品項 || p.name, unit: p.單位 || p.unit, price: Number(p.單價 || p.price) || 0 }));
         const rawOrders = result.data.orders || [];
         const orderMap: { [key: string]: Order } = {};
         rawOrders.forEach((o: any) => {
@@ -1023,95 +1095,44 @@ const App: React.FC = () => {
           if (!orderMap[oid]) {
             const rawDate = o.配送日期 || o.deliveryDate;
             const normalizedDate = normalizeDate(rawDate);
-            orderMap[oid] = {
-              id: oid,
-              createdAt: o.建立時間 || o.createdAt,
-              customerName: o.客戶名 || o.customerName || '未知客戶',
-              deliveryDate: normalizedDate,
-              deliveryTime: o.配送時間 || o.deliveryTime,
-              items: [],
-              note: o.備註 || o.note || '',
-              status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING,
-              deliveryMethod: o.配送方式 || o.deliveryMethod || ''
-            };
+            orderMap[oid] = { id: oid, createdAt: o.建立時間 || o.createdAt, customerName: o.客戶名 || o.customerName || '未知客戶', deliveryDate: normalizedDate, deliveryTime: o.配送時間 || o.deliveryTime, items: [], note: o.備註 || o.note || '', status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING, deliveryMethod: o.配送方式 || o.deliveryMethod || '' };
           }
           const prodName = o.品項 || o.productName;
           const prod = mappedProducts.find(p => p.name === prodName);
-          orderMap[oid].items.push({
-            productId: prod ? prod.id : prodName,
-            quantity: Number(o.數量 || o.quantity) || 0,
-            unit: o.unit || prod?.unit || '斤'
-          });
+          orderMap[oid].items.push({ productId: prod ? prod.id : prodName, quantity: Number(o.數量 || o.quantity) || 0, unit: o.unit || prod?.unit || '斤' });
         });
-
         setCustomers(mappedCustomers);
         setProducts(mappedProducts);
         setOrders(Object.values(orderMap));
       }
-    } catch (e) {
-      console.error("無法連線至雲端:", e);
-      alert("同步失敗，請檢查網路連線或稍後再試。\n請確認「設定」中的 API 網址是否正確。");
-    } finally {
-      setIsInitialLoading(false);
-    }
+    } catch (e) { console.error("無法連線至雲端:", e); alert("同步失敗，請檢查網路連線或稍後再試。\n請確認「設定」中的 API 網址是否正確。"); } finally { setIsInitialLoading(false); }
   };
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      syncData();
-    }
-  }, [isAuthenticated, apiEndpoint]);
+  useEffect(() => { if (isAuthenticated) { syncData(); } }, [isAuthenticated, apiEndpoint]);
 
-  const ordersForDate = useMemo(() => {
-    return orders.filter(o => o.deliveryDate === selectedDate);
-  }, [orders, selectedDate]);
-
+  // ... (保留 ordersForDate, groupedOrders 等 useMemo) ...
+  const ordersForDate = useMemo(() => orders.filter(o => o.deliveryDate === selectedDate), [orders, selectedDate]);
   const groupedOrders = useMemo(() => {
     const groups: Record<string, Order[]> = {};
-    ordersForDate.forEach(o => {
-      const name = o.customerName;
-      if (!groups[name]) groups[name] = [];
-      groups[name].push(o);
-    });
+    ordersForDate.forEach(o => { const name = o.customerName; if (!groups[name]) groups[name] = []; groups[name].push(o); });
     return groups;
   }, [ordersForDate]);
-
   const activeCustomersForDate = useMemo(() => {
     const dayOfWeek = new Date(selectedDate).getDay();
-    return customers.filter(c => {
-      const isSpecificHoliday = (c.holidayDates || []).includes(selectedDate);
-      const isWeeklyHoliday = (c.offDays || []).includes(dayOfWeek);
-      return !isSpecificHoliday && !isWeeklyHoliday;
-    });
+    return customers.filter(c => { const isSpecificHoliday = (c.holidayDates || []).includes(selectedDate); const isWeeklyHoliday = (c.offDays || []).includes(dayOfWeek); return !isSpecificHoliday && !isWeeklyHoliday; });
   }, [customers, selectedDate]);
-
-  const filteredCustomers = useMemo(() => {
-    return customers.filter(c => 
-      c.name.toLowerCase().includes(customerSearch.toLowerCase())
-    );
-  }, [customers, customerSearch]);
-
+  const filteredCustomers = useMemo(() => customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())), [customers, customerSearch]);
   const workSheetData = useMemo(() => {
-    // 支援多天選取：過濾條件改為 "日期在 workDates 陣列中"
     const dateOrders = orders.filter(o => workDates.includes(o.deliveryDate));
     const aggregation = new Map<string, { totalQty: number, unit: string, details: { customerName: string, qty: number }[] }>();
-
     dateOrders.forEach(o => {
       if (workCustomerFilter && !o.customerName.toLowerCase().includes(workCustomerFilter.toLowerCase())) return;
-      
-      if (workDeliveryMethodFilter.length > 0) {
-         const customer = customers.find(c => c.name === o.customerName);
-         const method = o.deliveryMethod || customer?.deliveryMethod || '';
-         if (!workDeliveryMethodFilter.includes(method)) return;
-      }
-
+      if (workDeliveryMethodFilter.length > 0) { const customer = customers.find(c => c.name === o.customerName); const method = o.deliveryMethod || customer?.deliveryMethod || ''; if (!workDeliveryMethodFilter.includes(method)) return; }
       o.items.forEach(item => {
         const product = products.find(p => p.id === item.productId || p.name === item.productId);
         const productName = product?.name || item.productId;
         const productUnit = product?.unit || '斤';
-        
         if (workProductFilter.length > 0 && !workProductFilter.includes(productName)) return;
-        
         if (!aggregation.has(productName)) aggregation.set(productName, { totalQty: 0, unit: productUnit, details: [] });
         const entry = aggregation.get(productName)!;
         entry.totalQty += item.quantity;
@@ -1121,737 +1142,511 @@ const App: React.FC = () => {
     return Array.from(aggregation.entries()).map(([name, data]) => ({ name, ...data })).sort((a, b) => b.totalQty - a.totalQty);
   }, [orders, workDates, workCustomerFilter, workProductFilter, workDeliveryMethodFilter, products, customers]);
 
+  // ... (保留 handler 函數) ...
   const handleSelectExistingCustomer = (id: string) => {
     const cust = customers.find(c => c.id === id);
     if (cust) {
-      if (groupedOrders[cust.name] && groupedOrders[cust.name].length > 0) {
-        alert(`⚠️ 提醒：\n\n「${cust.name}」在今日 (${selectedDate}) 已經建立過訂單了！\n\n若需增加品項，建議回到列表使用「追加訂單」功能，以免重複配送。`);
-      }
-      setOrderForm({
-        ...orderForm,
-        customerId: id,
-        customerName: cust.name,
-        deliveryTime: formatTimeForInput(cust.deliveryTime),
-        deliveryMethod: cust.deliveryMethod || '', // 自動帶入店家配送方式
-        items: cust.defaultItems && cust.defaultItems.length > 0 ? cust.defaultItems.map(di => ({ ...di })) : [{ productId: '', quantity: 10, unit: '斤' }]
-      });
+      if (groupedOrders[cust.name] && groupedOrders[cust.name].length > 0) { alert(`⚠️ 提醒：\n\n「${cust.name}」在今日 (${selectedDate}) 已經建立過訂單了！\n\n若需增加品項，建議回到列表使用「追加訂單」功能，以免重複配送。`); }
+      setOrderForm({ ...orderForm, customerId: id, customerName: cust.name, deliveryTime: formatTimeForInput(cust.deliveryTime), deliveryMethod: cust.deliveryMethod || '', items: cust.defaultItems && cust.defaultItems.length > 0 ? cust.defaultItems.map(di => ({ ...di })) : [{ productId: '', quantity: 10, unit: '斤' }] });
       setIsCustomerDropdownOpen(false);
     }
   };
-
   const handleSaveOrder = async () => {
     if (isSaving) return;
     const finalName = orderForm.customerType === 'existing' ? orderForm.customerName : orderForm.customerName;
     if (!finalName) return;
     const validItems = orderForm.items.filter(i => i.productId !== '' && i.quantity > 0);
     if (validItems.length === 0) return;
-
     setIsSaving(true);
-    
     const processedItems = orderSummary.details.filter(d => d.name !== '未選品項' && d.rawQty > 0).map(detail => {
-       const originalItem = orderForm.items.find(i => {
-           const p = products.find(prod => prod.id === i.productId);
-           return (p?.name || '') === detail.name || i.productId === detail.name;
-       }) || orderForm.items[0];
-       
-       return {
-           productId: originalItem.productId,
-           quantity: detail.displayQty, 
-           unit: detail.displayUnit
-       };
+       const originalItem = orderForm.items.find(i => { const p = products.find(prod => prod.id === i.productId); return (p?.name || '') === detail.name || i.productId === detail.name; }) || orderForm.items[0];
+       return { productId: originalItem.productId, quantity: detail.displayQty, unit: detail.displayUnit };
     });
-
-    const newOrder: Order = {
-      id: 'ORD-' + Date.now(),
-      createdAt: new Date().toISOString(),
-      customerName: finalName,
-      deliveryDate: selectedDate,
-      deliveryTime: orderForm.deliveryTime,
-      deliveryMethod: orderForm.deliveryMethod,
-      items: processedItems,
-      note: orderForm.note,
-      status: OrderStatus.PENDING
-    };
-
-    try {
-      if (apiEndpoint) {
-        const uploadItems = processedItems.map(item => {
-          const p = products.find(prod => prod.id === item.productId);
-          return { productName: p?.name || item.productId, quantity: item.quantity, unit: item.unit };
-        });
-        await fetch(apiEndpoint, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } })
-        });
-      }
-    } catch (e) { console.error(e); alert("訂單建立失敗，請檢查網路。"); }
-
-    setOrders([newOrder, ...orders]);
-    setIsSaving(false);
-    setIsAddingOrder(false);
-    setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', deliveryMethod: '', items: [{ productId: '', quantity: 10, unit: '斤' }], note: '' });
+    const newOrder: Order = { id: 'ORD-' + Date.now(), createdAt: new Date().toISOString(), customerName: finalName, deliveryDate: selectedDate, deliveryTime: orderForm.deliveryTime, deliveryMethod: orderForm.deliveryMethod, items: processedItems, note: orderForm.note, status: OrderStatus.PENDING };
+    try { if (apiEndpoint) { const uploadItems = processedItems.map(item => { const p = products.find(prod => prod.id === item.productId); return { productName: p?.name || item.productId, quantity: item.quantity, unit: item.unit }; }); await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } }) }); } } catch (e) { console.error(e); alert("訂單建立失敗，請檢查網路。"); }
+    setOrders([newOrder, ...orders]); setIsSaving(false); setIsAddingOrder(false); setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', deliveryMethod: '', items: [{ productId: '', quantity: 10, unit: '斤' }], note: '' });
   };
-
   const handleQuickAddSubmit = async () => {
-    if (!quickAddData || isSaving) return;
-    if (!quickAddData.productId || quickAddData.quantity <= 0) return;
-
-    setIsSaving(true);
-    const existingOrders = groupedOrders[quickAddData.customerName] || [];
-    const baseOrder = existingOrders[0];
-    
-    const now = new Date();
-    const deliveryTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    
-    const customer = customers.find(c => c.name === quickAddData.customerName);
-    const deliveryMethod = baseOrder?.deliveryMethod || customer?.deliveryMethod || '';
-
-    // --- 單位換算邏輯 ---
-    let finalQuantity = quickAddData.quantity;
-    let finalUnit = quickAddData.unit;
-    const product = products.find(p => p.id === quickAddData.productId);
-    // 預設轉換目標單位為 '斤' (若產品未設定單位，預設為斤)
-    const targetUnit = product?.unit || '斤';
-
-    if (quickAddData.unit === '元') {
-        const priceItem = customer?.priceList?.find(pl => pl.productId === quickAddData.productId);
-        const unitPrice = priceItem ? priceItem.price : (product?.price || 0);
-
-        if (unitPrice > 0) {
-            // 金額 / 單價 = 數量 (保留兩位小數)
-            finalQuantity = parseFloat((quickAddData.quantity / unitPrice).toFixed(2));
-            finalUnit = targetUnit; 
-        }
-    } else if (quickAddData.unit === '公斤' && targetUnit === '斤') {
-        // 額外支援：公斤轉台斤 (1kg = 1000g, 1台斤 = 600g => 1.666...)
-        finalQuantity = parseFloat((quickAddData.quantity * (1000 / 600)).toFixed(2));
-        finalUnit = '斤';
-    } else if (quickAddData.unit === '斤') {
-        finalUnit = '斤';
-    }
-    // 注意：若單位是 '包'，因無標準換算率，目前維持原狀。
-    // 但根據需求 "一律換算成斤"，針對可換算的單位已處理，並會在下方 uploadItems 確保。
-
-    // 使用換算後的數量與單位
-    const newOrder: Order = {
-      id: 'Q-ORD-' + Date.now(),
-      createdAt: new Date().toISOString(),
-      customerName: quickAddData.customerName,
-      deliveryDate: selectedDate,
-      deliveryTime: deliveryTime,
-      deliveryMethod: deliveryMethod,
-      items: [{ productId: quickAddData.productId, quantity: finalQuantity, unit: finalUnit }],
-      note: '追加單',
-      status: OrderStatus.PENDING
-    };
-
-    try {
-      if (apiEndpoint) {
-        const p = products.find(prod => prod.id === quickAddData.productId);
-        // 確保寫入 GAS 的資料也是換算後的 quantity，並且 unit 設定為 finalUnit
-        // GAS 後端 createOrder 會讀取 items[i].quantity 寫入欄位
-        const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: finalQuantity, unit: finalUnit }];
-        await fetch(apiEndpoint, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } })
-        });
-      }
-    } catch (e) { console.error(e); alert("追加失敗，請檢查網路。"); }
-
-    setOrders([newOrder, ...orders]);
-    setIsSaving(false);
-    setQuickAddData(null);
+    if (!quickAddData || isSaving) return; if (!quickAddData.productId || quickAddData.quantity <= 0) return; setIsSaving(true);
+    const existingOrders = groupedOrders[quickAddData.customerName] || []; const baseOrder = existingOrders[0];
+    const now = new Date(); const deliveryTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const customer = customers.find(c => c.name === quickAddData.customerName); const deliveryMethod = baseOrder?.deliveryMethod || customer?.deliveryMethod || '';
+    let finalQuantity = quickAddData.quantity; let finalUnit = quickAddData.unit; const product = products.find(p => p.id === quickAddData.productId); const targetUnit = product?.unit || '斤';
+    if (quickAddData.unit === '元') { const priceItem = customer?.priceList?.find(pl => pl.productId === quickAddData.productId); const unitPrice = priceItem ? priceItem.price : (product?.price || 0); if (unitPrice > 0) { finalQuantity = parseFloat((quickAddData.quantity / unitPrice).toFixed(2)); finalUnit = targetUnit; } } else if (quickAddData.unit === '公斤' && targetUnit === '斤') { finalQuantity = parseFloat((quickAddData.quantity * (1000 / 600)).toFixed(2)); finalUnit = '斤'; } else if (quickAddData.unit === '斤') { finalUnit = '斤'; }
+    const newOrder: Order = { id: 'Q-ORD-' + Date.now(), createdAt: new Date().toISOString(), customerName: quickAddData.customerName, deliveryDate: selectedDate, deliveryTime: deliveryTime, deliveryMethod: deliveryMethod, items: [{ productId: quickAddData.productId, quantity: finalQuantity, unit: finalUnit }], note: '追加單', status: OrderStatus.PENDING };
+    try { if (apiEndpoint) { const p = products.find(prod => prod.id === quickAddData.productId); const uploadItems = [{ productName: p?.name || quickAddData.productId, quantity: finalQuantity, unit: finalUnit }]; await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } }) }); } } catch (e) { console.error(e); alert("追加失敗，請檢查網路。"); }
+    setOrders([newOrder, ...orders]); setIsSaving(false); setQuickAddData(null);
   };
-
-  const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
-    const previousOrders = [...orders];
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
-
-    try {
-      if (apiEndpoint) {
-        await fetch(apiEndpoint, {
-          method: 'POST',
-          body: JSON.stringify({ 
-            action: 'updateOrderStatus', 
-            data: { id: orderId, status: newStatus } 
-          })
-        });
-      }
-    } catch (e) {
-      console.error("狀態更新失敗", e);
-      alert("狀態更新失敗，請檢查網路。");
-      setOrders(previousOrders);
-    }
-  };
-
-  const executeDeleteOrder = async (orderId: string) => {
-    setConfirmConfig(prev => ({ ...prev, isOpen: false }));
-    const orderBackup = orders.find(o => o.id === orderId);
-    if (!orderBackup) return;
-
-    setOrders(prev => prev.filter(o => o.id !== orderId));
-
-    try {
-      if (apiEndpoint) {
-        await fetch(apiEndpoint, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'deleteOrder', data: { id: orderId } })
-        });
-      }
-    } catch (e) { 
-      console.error("刪除失敗:", e);
-      alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。");
-      setOrders(prev => [...prev, orderBackup]);
-    }
-  };
-
-  const executeDeleteCustomer = async (customerId: string) => {
-    setConfirmConfig(prev => ({ ...prev, isOpen: false }));
-    const customerBackup = customers.find(c => c.id === customerId);
-    if (!customerBackup) return;
-
-    setCustomers(prev => prev.filter(c => c.id !== customerId));
-
-    try {
-      if (apiEndpoint) {
-        await fetch(apiEndpoint, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'deleteCustomer', data: { id: customerId } })
-        });
-      }
-    } catch (e) { 
-      console.error("刪除失敗:", e);
-      alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。");
-      setCustomers(prev => [...prev, customerBackup]);
-    }
-  };
-
-  const executeDeleteProduct = async (productId: string) => {
-    setConfirmConfig(prev => ({ ...prev, isOpen: false }));
-    const productBackup = products.find(p => p.id === productId);
-    if (!productBackup) return;
-
-    setProducts(prev => prev.filter(p => p.id !== productId));
-
-    try {
-      if (apiEndpoint) {
-        await fetch(apiEndpoint, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'deleteProduct', data: { id: productId } })
-        });
-      }
-    } catch (e) { 
-      console.error("刪除失敗:", e);
-      alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。");
-      setProducts(prev => [...prev, productBackup]);
-    }
-  };
-
-  const handleDeleteOrder = (orderId: string) => {
-    setConfirmConfig({
-      isOpen: true,
-      title: '刪除訂單',
-      message: '確定要刪除此訂單嗎？\n此動作將會同步刪除雲端資料。',
-      onConfirm: () => executeDeleteOrder(orderId)
-    });
-  };
-
-  const handleDeleteCustomer = (customerId: string) => {
-    setConfirmConfig({
-      isOpen: true,
-      title: '刪除店家',
-      message: '確定要刪除此店家嗎？\n這將一併刪除相關的設定。',
-      onConfirm: () => executeDeleteCustomer(customerId)
-    });
-  };
-
-  const handleDeleteProduct = (productId: string) => {
-    setConfirmConfig({
-      isOpen: true,
-      title: '刪除品項',
-      message: '確定要刪除此品項嗎？\n請確認該品項已無生產需求。',
-      onConfirm: () => executeDeleteProduct(productId)
-    });
-  };
-
-  const handleSaveCustomer = async () => {
-    if (!customerForm.name || isSaving) return;
-    setIsSaving(true);
-    const isDuplicateName = customers.some(c => 
-      c.name.trim() === (customerForm.name || '').trim() && 
-      c.id !== (isEditingCustomer === 'new' ? null : isEditingCustomer)
-    );
-    if (isDuplicateName) { alert('客戶名稱不可重複！請使用其他名稱。'); setIsSaving(false); return; }
-
-    const finalCustomer: Customer = {
-      id: isEditingCustomer === 'new' ? Date.now().toString() : (isEditingCustomer as string),
-      name: (customerForm.name || '').trim(),
-      phone: (customerForm.phone || '').trim(),
-      deliveryTime: customerForm.deliveryTime || '08:00',
-      deliveryMethod: customerForm.deliveryMethod || '', 
-      defaultItems: (customerForm.defaultItems || []).filter(i => i.productId !== ''),
-      priceList: (customerForm.priceList || []), 
-      offDays: customerForm.offDays || [],
-      holidayDates: customerForm.holidayDates || []
-    };
-
-    try {
-      if (apiEndpoint) {
-        await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateCustomer', data: finalCustomer }) });
-      }
-    } catch (e) { console.error(e); }
-
-    if (isEditingCustomer === 'new') setCustomers([...customers, finalCustomer]);
-    else setCustomers(customers.map(c => c.id === isEditingCustomer ? finalCustomer : c));
-    setIsSaving(false);
-    setIsEditingCustomer(null);
-  };
-
-  const handleSaveProduct = async () => {
-    if (!productForm.name || isSaving) return;
-    setIsSaving(true);
-    const finalProduct = { 
-      id: isEditingProduct === 'new' ? 'p' + Date.now() : (isEditingProduct as string),
-      name: productForm.name || '',
-      unit: productForm.unit || '斤',
-      price: Number(productForm.price) || 0 
-    };
-    try {
-      if (apiEndpoint) {
-        await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateProduct', data: finalProduct }) });
-      }
-    } catch (e) { console.error(e); }
-    if (isEditingProduct === 'new') setProducts([...products, finalProduct]);
-    else setProducts(products.map(p => p.id === isEditingProduct ? finalProduct : p));
-    setIsSaving(false);
-    setIsEditingProduct(null);
-  };
-  
-  const handlePrint = () => {
-    if (workSheetData.length === 0) { alert('目前沒有資料可供匯出'); return; }
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) { alert('彈跳視窗被封鎖，無法開啟列印頁面。\n\n請允許本網站顯示彈跳視窗，或嘗試使用瀏覽器選單的「列印」功能。'); window.print(); return; }
-    
-    // Format dates for display
-    const sortedDates = [...workDates].sort();
-    const dateRangeDisplay = sortedDates.length > 1 
-       ? `${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]} (${sortedDates.length}天)`
-       : sortedDates[0];
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>麵廠職人 - 生產總表</title>
-          <style>
-            body { font-family: sans-serif; padding: 20px; color: #333; }
-            h1 { text-align: center; margin-bottom: 10px; font-size: 32px; }
-            p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 20px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
-            th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 20px; }
-            tr:nth-child(even) { background-color: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            .text-right { text-align: right; }
-            .text-center { text-align: center; }
-            .badge { display: inline-block; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 16px; margin: 4px; border: 1px solid #ddd; color: #555; }
-            .total-cell { font-size: 24px; font-weight: bold; }
-            .footer { margin-top: 40px; text-align: right; font-size: 14px; color: #999; border-top: 1px solid #eee; padding-top: 10px; }
-          </style>
-        </head>
-        <body>
-          <h1>生產總表</h1>
-          <p class="date">出貨日期: ${dateRangeDisplay}</p>
-          <table>
-            <thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead>
-            <tbody>
-              ${workSheetData.map((item, idx) => `
-                <tr><td style="font-weight: bold; font-size: 22px;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center" style="font-size: 18px;">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>
-              `).join('')}
-            </tbody>
-          </table>
-          <div class="footer">列印時間: ${new Date().toLocaleString()}</div>
-          <script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script>
-        </body>
-      </html>
-    `;
-    printWindow.document.write(htmlContent);
-    printWindow.document.close();
-  };
-
-  const handleLogin = (pwd: string) => {
-    if (pwd === currentPassword) { setIsAuthenticated(true); localStorage.setItem('nm_auth_status', 'true'); return true; }
-    return false;
-  };
+  const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => { const previousOrders = [...orders]; setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateOrderStatus', data: { id: orderId, status: newStatus } }) }); } } catch (e) { console.error("狀態更新失敗", e); alert("狀態更新失敗，請檢查網路。"); setOrders(previousOrders); } };
+  const executeDeleteOrder = async (orderId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const orderBackup = orders.find(o => o.id === orderId); if (!orderBackup) return; setOrders(prev => prev.filter(o => o.id !== orderId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteOrder', data: { id: orderId } }) }); } } catch (e) { console.error("刪除失敗:", e); alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。"); setOrders(prev => [...prev, orderBackup]); } };
+  const executeDeleteCustomer = async (customerId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const customerBackup = customers.find(c => c.id === customerId); if (!customerBackup) return; setCustomers(prev => prev.filter(c => c.id !== customerId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteCustomer', data: { id: customerId } }) }); } } catch (e) { console.error("刪除失敗:", e); alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。"); setCustomers(prev => [...prev, customerBackup]); } };
+  const executeDeleteProduct = async (productId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const productBackup = products.find(p => p.id === productId); if (!productBackup) return; setProducts(prev => prev.filter(p => p.id !== productId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteProduct', data: { id: productId } }) }); } } catch (e) { console.error("刪除失敗:", e); alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。"); setProducts(prev => [...prev, productBackup]); } };
+  const handleDeleteOrder = (orderId: string) => { setConfirmConfig({ isOpen: true, title: '刪除訂單', message: '確定要刪除此訂單嗎？\n此動作將會同步刪除雲端資料。', onConfirm: () => executeDeleteOrder(orderId) }); };
+  const handleDeleteCustomer = (customerId: string) => { setConfirmConfig({ isOpen: true, title: '刪除店家', message: '確定要刪除此店家嗎？\n這將一併刪除相關的設定。', onConfirm: () => executeDeleteCustomer(customerId) }); };
+  const handleDeleteProduct = (productId: string) => { setConfirmConfig({ isOpen: true, title: '刪除品項', message: '確定要刪除此品項嗎？\n請確認該品項已無生產需求。', onConfirm: () => executeDeleteProduct(productId) }); };
+  const handleSaveCustomer = async () => { if (!customerForm.name || isSaving) return; setIsSaving(true); const isDuplicateName = customers.some(c => c.name.trim() === (customerForm.name || '').trim() && c.id !== (isEditingCustomer === 'new' ? null : isEditingCustomer)); if (isDuplicateName) { alert('客戶名稱不可重複！請使用其他名稱。'); setIsSaving(false); return; } const finalCustomer: Customer = { id: isEditingCustomer === 'new' ? Date.now().toString() : (isEditingCustomer as string), name: (customerForm.name || '').trim(), phone: (customerForm.phone || '').trim(), deliveryTime: customerForm.deliveryTime || '08:00', deliveryMethod: customerForm.deliveryMethod || '', defaultItems: (customerForm.defaultItems || []).filter(i => i.productId !== ''), priceList: (customerForm.priceList || []), offDays: customerForm.offDays || [], holidayDates: customerForm.holidayDates || [] }; try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateCustomer', data: finalCustomer }) }); } } catch (e) { console.error(e); } if (isEditingCustomer === 'new') setCustomers([...customers, finalCustomer]); else setCustomers(customers.map(c => c.id === isEditingCustomer ? finalCustomer : c)); setIsSaving(false); setIsEditingCustomer(null); };
+  const handleSaveProduct = async () => { if (!productForm.name || isSaving) return; setIsSaving(true); const finalProduct = { id: isEditingProduct === 'new' ? 'p' + Date.now() : (isEditingProduct as string), name: productForm.name || '', unit: productForm.unit || '斤', price: Number(productForm.price) || 0 }; try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateProduct', data: finalProduct }) }); } } catch (e) { console.error(e); } if (isEditingProduct === 'new') setProducts([...products, finalProduct]); else setProducts(products.map(p => p.id === isEditingProduct ? finalProduct : p)); setIsSaving(false); setIsEditingProduct(null); };
+  const handlePrint = () => { if (workSheetData.length === 0) { alert('目前沒有資料可供匯出'); return; } const printWindow = window.open('', '_blank'); if (!printWindow) { alert('彈跳視窗被封鎖，無法開啟列印頁面。\n\n請允許本網站顯示彈跳視窗，或嘗試使用瀏覽器選單的「列印」功能。'); window.print(); return; } const sortedDates = [...workDates].sort(); const dateRangeDisplay = sortedDates.length > 1 ? `${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]} (${sortedDates.length}天)` : sortedDates[0]; const htmlContent = `<!DOCTYPE html><html><head><title>麵廠職人 - 生產總表</title><style>body { font-family: sans-serif; padding: 20px; color: #333; } h1 { text-align: center; margin-bottom: 10px; font-size: 32px; } p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 20px; font-weight: bold; } table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; } th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; } th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 20px; } tr:nth-child(even) { background-color: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .text-right { text-align: right; } .text-center { text-align: center; } .badge { display: inline-block; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 16px; margin: 4px; border: 1px solid #ddd; color: #555; } .total-cell { font-size: 24px; font-weight: bold; } .footer { margin-top: 40px; text-align: right; font-size: 14px; color: #999; border-top: 1px solid #eee; padding-top: 10px; } </style></head><body><h1>生產總表</h1><p class="date">出貨日期: ${dateRangeDisplay}</p><table><thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead><tbody>${workSheetData.map((item, idx) => `<tr><td style="font-weight: bold; font-size: 22px;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center" style="font-size: 18px;">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>`).join('')}</tbody></table><div class="footer">列印時間: ${new Date().toLocaleString()}</div><script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script></body></html>`; printWindow.document.write(htmlContent); printWindow.document.close(); };
+  const handleLogin = async (pwd: string) => { if (!apiEndpoint) { if (pwd === '8888') { setIsAuthenticated(true); localStorage.setItem('nm_auth_status', 'true'); return true; } return false; } try { const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'login', data: { password: pwd } }) }); const json = await res.json(); if (json.success && json.data === true) { setIsAuthenticated(true); localStorage.setItem('nm_auth_status', 'true'); return true; } return false; } catch (e) { console.error("Login Error:", e); return false; } };
   const handleLogout = () => { setIsAuthenticated(false); localStorage.removeItem('nm_auth_status'); setCustomers([]); setOrders([]); setProducts([]); };
-  
-  // 更新後的更改密碼邏輯：驗證舊密碼
-  const handleChangePassword = (oldPwd: string, newPwd: string) => { 
-    if (oldPwd !== currentPassword) {
-      return false; // 原密碼錯誤
-    }
-    localStorage.setItem('nm_app_password', newPwd); 
-    setCurrentPassword(newPwd); 
-    return true; // 更新成功
-  };
-  
-  const handleSaveApiUrl = (newUrl: string) => {
-    localStorage.setItem('nm_gas_url', newUrl);
-    setApiEndpoint(newUrl);
-  };
+  const handleChangePassword = async (oldPwd: string, newPwd: string) => { if (!apiEndpoint) return false; try { const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'changePassword', data: { oldPassword: oldPwd, newPassword: newPwd } }) }); const json = await res.json(); if (json.success && json.data === true) { return true; } return false; } catch (e) { console.error("Change Password Error:", e); return false; } };
+  const handleSaveApiUrl = (newUrl: string) => { localStorage.setItem('nm_gas_url', newUrl); setApiEndpoint(newUrl); };
 
   if (!isAuthenticated) return <LoginScreen onLogin={handleLogin} />;
-  if (isInitialLoading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#f4f1ea] p-10 text-center"><Loader2 className="w-12 h-12 text-[#8e9775] animate-spin mb-6" /><h2 className="text-xl font-bold text-gray-700">正在同步雲端資料...</h2></div>;
+  if (isInitialLoading) return <div className="min-h-screen flex flex-col items-center justify-center bg-morandi-oatmeal p-10 text-center"><Loader2 className="w-12 h-12 text-morandi-blue animate-spin mb-6" /><h2 className="text-xl font-bold text-morandi-charcoal tracking-wide">正在同步雲端資料...</h2></div>;
 
   return (
-    <div className="min-h-screen flex flex-col max-w-md mx-auto bg-[#f4f1ea] relative shadow-2xl overflow-hidden">
+    <div className="min-h-screen flex flex-col max-w-md mx-auto bg-morandi-oatmeal relative shadow-2xl overflow-hidden text-morandi-charcoal font-sans">
       <header className="p-6 bg-white border-b border-gray-100 flex justify-between items-center sticky top-0 z-40">
-        <div><h1 className="text-2xl font-bold text-gray-800 tracking-tight">麵廠職人</h1><p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">專業訂單管理系統</p></div>
+        <div><h1 className="text-2xl font-extrabold text-morandi-charcoal tracking-tight">麵廠職人</h1><p className="text-[10px] text-morandi-pebble font-bold uppercase tracking-widest mt-0.5">專業訂單管理系統</p></div>
         <div className="flex gap-2">
-           <button onClick={handleLogout} className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center border border-gray-100 text-gray-400 hover:text-rose-400 hover:bg-rose-50 transition-colors"><LogOut className="w-5 h-5" /></button>
-          <button onClick={() => setIsSettingsOpen(true)} className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center border border-gray-100 text-gray-400 hover:text-slate-600 transition-colors active:scale-95"><Settings className="w-5 h-5" /></button>
+           <motion.button whileTap={buttonTap} onClick={handleLogout} className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center border border-slate-100 text-morandi-pebble hover:text-rose-400 hover:bg-rose-50 transition-colors"><LogOut className="w-5 h-5" /></motion.button>
+          <motion.button whileTap={buttonTap} onClick={() => setIsSettingsOpen(true)} className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center border border-slate-100 text-morandi-pebble hover:text-slate-600 transition-colors active:scale-95"><Settings className="w-5 h-5" /></motion.button>
         </div>
       </header>
 
       <main className="flex-1 overflow-y-auto pb-24 px-4 pt-4">
+        {/* ... (Orders Tab Remains - Minor visual tweaks can be applied but leaving mostly as is for Schedule focus) ... */}
+        <AnimatePresence mode="wait">
         {activeTab === 'orders' && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <motion.div 
+            key="orders"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            transition={{ duration: 0.2 }}
+            className="space-y-6"
+          >
             <div className="flex items-center justify-between px-1">
-              <button onClick={() => setIsDatePickerOpen(true)} className="flex items-center gap-3 bg-white p-4 rounded-[28px] shadow-sm border border-white active:scale-95 transition-all">
-                <div className="w-10 h-10 rounded-2xl flex items-center justify-center" style={{ backgroundColor: `${COLORS.primary}15` }}><CalendarDays className="w-5 h-5" style={{ color: COLORS.primary }} /></div>
-                <div><p className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">出貨日期</p><p className="font-bold text-slate-800">{selectedDate}</p></div>
-              </button>
-              <button onClick={() => setIsAddingOrder(true)} className="w-14 h-14 rounded-[24px] text-white shadow-lg active:scale-95 transition-all flex items-center justify-center" style={{ backgroundColor: COLORS.primary }}><Plus className="w-8 h-8" /></button>
+              <motion.button whileTap={buttonTap} onClick={() => setIsDatePickerOpen(true)} className="flex items-center gap-3 bg-white p-4 rounded-[20px] shadow-sm border border-slate-200 active:scale-95 transition-all">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-morandi-blue/10"><CalendarDays className="w-5 h-5 text-morandi-blue" /></div>
+                <div><p className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest">出貨日期</p><p className="font-bold text-morandi-charcoal text-lg tracking-tight">{selectedDate}</p></div>
+              </motion.button>
+              <motion.button whileTap={buttonTap} whileHover={buttonHover} onClick={() => setIsAddingOrder(true)} className="w-14 h-14 rounded-[20px] text-white shadow-lg shadow-morandi-blue/20 hover:bg-slate-600 active:scale-95 transition-all flex items-center justify-center bg-morandi-blue"><Plus className="w-8 h-8" /></motion.button>
             </div>
             
-            <div className="space-y-2">
-              <h2 className="text-sm font-bold text-gray-400 px-2 flex items-center gap-2 uppercase tracking-widest mb-2"><Layers className="w-4 h-4" /> 配送列表 [{selectedDate}] ({Object.keys(groupedOrders).length} 家)</h2>
+            <div className="space-y-3">
+              <h2 className="text-sm font-bold text-morandi-pebble px-2 flex items-center gap-2 uppercase tracking-widest mb-2"><Layers className="w-4 h-4" /> 配送列表 [{selectedDate}] ({Object.keys(groupedOrders).length} 家)</h2>
+              <motion.div variants={containerVariants} initial="hidden" animate="show">
               {Object.keys(groupedOrders).length > 0 ? (
                 Object.entries(groupedOrders).map(([custName, custOrders]) => {
                   const isExpanded = expandedCustomer === custName;
-                  
                   const currentCustomer = customers.find(c => c.name === custName);
                   let totalAmount = 0;
                   const itemSummaries: string[] = [];
-
                   custOrders.forEach(o => {
                     o.items.forEach(item => {
                       const p = products.find(prod => prod.id === item.productId);
                       const pName = p?.name || item.productId;
                       const unit = item.unit || p?.unit || '斤';
-                      
                       itemSummaries.push(`${pName} ${item.quantity}${unit}`);
-
-                      if (unit === '元') {
-                        totalAmount += item.quantity;
-                      } else {
-                        const priceInfo = currentCustomer?.priceList?.find(pl => pl.productId === item.productId);
-                        const price = priceInfo ? priceInfo.price : 0;
-                        totalAmount += Math.round(item.quantity * price);
-                      }
+                      if (unit === '元') { totalAmount += item.quantity; } else { const priceInfo = currentCustomer?.priceList?.find(pl => pl.productId === item.productId); const price = priceInfo ? priceInfo.price : 0; totalAmount += Math.round(item.quantity * price); }
                     });
                   });
-                  
                   const summaryText = itemSummaries.join('、');
 
                   return (
-                    <div key={custName} className="bg-white rounded-[24px] shadow-sm border border-white overflow-hidden transition-all duration-300">
-                      <button onClick={() => setExpandedCustomer(isExpanded ? null : custName)} className="w-full flex items-center justify-between p-5 text-left active:bg-gray-50 transition-colors">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                          <div className={`w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-lg font-bold transition-colors ${isExpanded ? 'bg-sage-50 text-sage-600' : 'bg-gray-50 text-gray-400'}`} style={{ color: isExpanded ? COLORS.primary : '', backgroundColor: isExpanded ? `${COLORS.primary}20` : '' }}>{custName.charAt(0)}</div>
+                    <motion.div 
+                        variants={itemVariants}
+                        layout
+                        key={custName} 
+                        className="bg-white rounded-[24px] shadow-sm border border-slate-200 overflow-hidden mb-3 hover:shadow-md transition-shadow duration-300"
+                    >
+                      <button onClick={() => setExpandedCustomer(isExpanded ? null : custName)} className="w-full flex items-center justify-between p-5 text-left active:bg-morandi-oatmeal/30 transition-colors">
+                        <div className="flex items-center gap-4 overflow-hidden">
+                          <div className={`w-12 h-12 rounded-[16px] flex-shrink-0 flex items-center justify-center text-xl font-extrabold transition-colors ${isExpanded ? 'bg-morandi-blue text-white' : 'bg-morandi-oatmeal text-morandi-pebble'}`}>
+                             {custName.charAt(0)}
+                          </div>
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                                <h3 className={`font-bold text-lg truncate ${isExpanded ? 'text-slate-800' : 'text-slate-600'}`}>{custName}</h3>
+                            <div className="flex items-center gap-2 mb-1">
+                                <h3 className={`font-bold text-lg truncate tracking-tight ${isExpanded ? 'text-morandi-charcoal' : 'text-slate-700'}`}>{custName}</h3>
                                 {totalAmount > 0 && (
-                                  <span className="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full font-black flex-shrink-0">
+                                  <span className="bg-morandi-amber-bg text-morandi-amber-text text-[10px] px-2 py-0.5 rounded-full font-bold flex-shrink-0 tracking-wide">
                                     ${totalAmount.toLocaleString()}
                                   </span>
                                 )}
                             </div>
                             {!isExpanded && (
-                                <p className="text-[11px] text-gray-400 font-medium mt-0.5 truncate">
+                                <p className="text-xs text-morandi-pebble font-medium truncate leading-relaxed tracking-wide">
                                   {summaryText || `${custOrders.reduce((sum, o) => sum + o.items.length, 0)} 個品項`}
                                 </p>
                             )}
                           </div>
                         </div>
-                        {isExpanded ? <ChevronUp className="w-5 h-5 text-gray-300 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 text-gray-300 flex-shrink-0" />}
+                        {isExpanded ? <ChevronUp className="w-5 h-5 text-morandi-pebble flex-shrink-0" /> : <ChevronDown className="w-5 h-5 text-morandi-pebble flex-shrink-0" />}
                       </button>
+                      
+                      <AnimatePresence>
                       {isExpanded && (
-                        <div className="bg-gray-50/50 border-t border-gray-100 p-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                        <motion.div 
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="bg-morandi-oatmeal/20 border-t border-slate-100 overflow-hidden"
+                        >
+                          <div className="p-5 space-y-4">
                           {custOrders.map((order) => (
-                             <div key={order.id} className="relative group">
-                               {order.items.map((item, itemIdx) => {
-                                 const p = products.find(prod => prod.id === item.productId);
-                                 return (
-                                   <div key={`${order.id}-${itemIdx}`} className="flex justify-between items-center py-2 px-2 border-b border-gray-100 last:border-0 hover:bg-white rounded-lg transition-colors">
-                                     <span className="font-bold text-slate-700">{p?.name || item.productId}</span>
-                                     <div className="flex items-center gap-3"><span className="font-black text-xl text-slate-800">{item.quantity}</span><span className="text-xs text-gray-400 font-bold w-4">{item.unit || p?.unit || '斤'}</span></div>
-                                   </div>
-                                 );
-                               })}
-                               <div className="flex justify-end mt-1"><button onClick={(e) => { e.stopPropagation(); handleDeleteOrder(order.id); }} className="text-[10px] text-rose-300 hover:text-rose-500 px-2 py-1 flex items-center gap-1"><Trash2 className="w-3 h-3" /> 刪除此單</button></div>
+                             <div key={order.id} className="relative group bg-white p-4 rounded-[16px] shadow-sm border border-slate-100">
+                               <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-50">
+                                  <div className="flex-1 text-[10px] font-bold text-morandi-pebble uppercase tracking-widest">訂單編號 #{order.id.slice(-4)}</div>
+                                  <motion.button whileTap={{ scale: 0.9 }} onClick={(e) => { e.stopPropagation(); handleDeleteOrder(order.id); }} className="text-[10px] text-morandi-pink hover:text-rose-500 px-2 py-1 flex items-center gap-1 rounded-full hover:bg-rose-50 transition-colors"><Trash2 className="w-3 h-3" /> 刪除</motion.button>
+                               </div>
+                               <div className="space-y-2">
+                                 {order.items.map((item, itemIdx) => {
+                                   const p = products.find(prod => prod.id === item.productId);
+                                   return (
+                                     <div key={`${order.id}-${itemIdx}`} className="flex justify-between items-center py-1">
+                                       <span className="font-bold text-morandi-charcoal tracking-wide">{p?.name || item.productId}</span>
+                                       <div className="flex items-center gap-2">
+                                          <span className="font-extrabold text-lg text-morandi-charcoal tracking-tight">{item.quantity}</span>
+                                          <span className="text-xs text-morandi-pebble font-bold">{item.unit || p?.unit || '斤'}</span>
+                                       </div>
+                                     </div>
+                                   );
+                                 })}
+                               </div>
                              </div>
                           ))}
-                          <button onClick={() => setQuickAddData({ customerName: custName, productId: '', quantity: 0, unit: '斤' })} className="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-sage-200 text-sage-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-sage-50 transition-colors" style={{ borderColor: `${COLORS.primary}40`, color: COLORS.primary }}><Plus className="w-4 h-4" /> 追加訂單</button>
-                          <div className="flex gap-2">
-                             <button onClick={() => handleCopyOrder(custName, custOrders)} className="flex-1 py-3 px-4 rounded-xl bg-gray-200 text-slate-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-gray-300 transition-colors"><Copy className="w-4 h-4" /> 複製訂單內容</button>
-                             <button onClick={() => openGoogleMaps(custName)} className="flex-1 py-3 px-4 rounded-xl bg-blue-50 text-blue-500 font-bold text-sm flex items-center justify-center gap-2 hover:bg-blue-100 transition-colors"><MapPin className="w-4 h-4" /> 導航</button>
+                          
+                          <motion.button whileTap={buttonTap} onClick={() => setQuickAddData({ customerName: custName, productId: '', quantity: 0, unit: '斤' })} className="w-full mt-2 py-3 rounded-[16px] border-2 border-dashed border-morandi-blue/30 text-morandi-blue font-bold text-sm flex items-center justify-center gap-2 hover:bg-morandi-blue/5 transition-colors tracking-wide"><Plus className="w-4 h-4" /> 追加訂單</motion.button>
+                          
+                          <div className="flex gap-2 pt-2">
+                             <motion.button whileTap={buttonTap} onClick={() => handleCopyOrder(custName, custOrders)} className="flex-1 py-3 px-4 rounded-[16px] bg-white text-morandi-pebble border border-slate-200 font-bold text-sm flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors shadow-sm tracking-wide"><Copy className="w-4 h-4" /> 複製</motion.button>
+                             <motion.button whileTap={buttonTap} onClick={() => openGoogleMaps(custName)} className="flex-1 py-3 px-4 rounded-[16px] bg-morandi-blue text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-slate-600 transition-colors shadow-lg shadow-morandi-blue/20 tracking-wide"><MapPin className="w-4 h-4" /> 導航</motion.button>
                           </div>
-                        </div>
+                          </div>
+                        </motion.div>
                       )}
-                    </div>
+                      </AnimatePresence>
+                    </motion.div>
                   );
                 })
               ) : (
-                <div className="py-20 flex flex-col items-center text-center gap-4"><ClipboardList className="w-16 h-16 text-gray-200" /><p className="text-gray-300 italic text-sm">此日期尚無訂單</p></div>
+                <div className="py-20 flex flex-col items-center text-center gap-4"><ClipboardList className="w-16 h-16 text-gray-200" /><p className="text-gray-300 italic text-sm tracking-wide">此日期尚無訂單</p></div>
               )}
+              </motion.div>
             </div>
-          </div>
+          </motion.div>
         )}
 
+        {/* ... (Customers Tab Remains) ... */}
         {activeTab === 'customers' && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <motion.div 
+            key="customers"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            transition={{ duration: 0.2 }}
+            className="space-y-6"
+          >
             <div className="flex justify-between items-center px-1">
-              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Users className="w-5 h-5" style={{ color: COLORS.primary }} /> 店家管理</h2>
-              <button onClick={() => { setCustomerForm({ name: '', phone: '', deliveryTime: '08:00', defaultItems: [], offDays: [], holidayDates: [], priceList: [], deliveryMethod: '' }); setIsEditingCustomer('new'); setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
+              <h2 className="text-xl font-extrabold text-morandi-charcoal flex items-center gap-2 tracking-tight"><Users className="w-5 h-5 text-morandi-blue" /> 店家管理</h2>
+              <motion.button whileTap={buttonTap} whileHover={buttonHover} onClick={() => { setCustomerForm({ name: '', phone: '', deliveryTime: '08:00', defaultItems: [], offDays: [], holidayDates: [], priceList: [], deliveryMethod: '' }); setIsEditingCustomer('new'); setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤'); }} className="p-3 rounded-2xl text-white shadow-lg bg-morandi-blue hover:bg-slate-600 transition-colors"><Plus className="w-6 h-6" /></motion.button>
             </div>
             <div className="relative mb-2">
                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300" />
-                <input type="text" placeholder="搜尋店家名稱..." className="w-full pl-14 pr-6 py-4 bg-white rounded-[24px] border-none shadow-sm text-slate-800 font-bold focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} />
+                <input type="text" placeholder="搜尋店家名稱..." className="w-full pl-14 pr-6 py-4 bg-white rounded-[24px] border border-slate-100 shadow-sm text-morandi-charcoal font-bold tracking-wide focus:ring-2 focus:ring-morandi-blue transition-all placeholder:text-gray-300" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} />
             </div>
+            <motion.div variants={containerVariants} initial="hidden" animate="show">
             {filteredCustomers.map(c => (
-              <div key={c.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-white">
+              <motion.div variants={itemVariants} key={c.id} className="bg-white rounded-[32px] p-6 shadow-sm border border-slate-200 mb-4 hover:shadow-md transition-all">
                 <div className="flex justify-between items-start mb-4">
-                  <div className="flex items-center gap-3"><div className="w-14 h-14 rounded-[22px] bg-gray-50 flex items-center justify-center text-xl font-bold" style={{ color: COLORS.primary }}>{c.name.charAt(0)}</div><div><h3 className="font-bold text-slate-800 text-lg">{c.name}</h3><p className="text-xs text-slate-500 font-medium">{c.phone || '無電話'}</p></div></div>
+                  <div className="flex items-center gap-3"><div className="w-14 h-14 rounded-[22px] bg-morandi-oatmeal flex items-center justify-center text-xl font-extrabold text-morandi-blue">{c.name.charAt(0)}</div><div><h3 className="font-bold text-slate-800 text-lg tracking-tight">{c.name}</h3><p className="text-xs text-slate-500 font-medium tracking-wide">{c.phone || '無電話'}</p></div></div>
                   <div className="flex flex-col items-end gap-1"><div className="flex gap-1">{WEEKDAYS.map(d => (<div key={d.value} className={`w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold ${c.offDays?.includes(d.value) ? 'bg-rose-100 text-rose-400' : 'bg-gray-50 text-gray-300'}`}>{d.label}</div>))}</div>
                   {c.holidayDates && c.holidayDates.length > 0 && <span className="text-[8px] font-bold text-rose-300">+{c.holidayDates.length} 特定休</span>}
                   {c.priceList && c.priceList.length > 0 && <span className="text-[8px] font-bold text-amber-500 bg-amber-50 px-1.5 py-0.5 rounded mt-1">已設 {c.priceList.length} 種單價</span>}
                   </div>
                 </div>
-                <div className="space-y-3 mb-4 bg-gray-50/60 p-4 rounded-[24px]">
+                <div className="space-y-3 mb-4 bg-gray-50/60 p-4 rounded-[24px] border border-gray-100">
                   <div className="flex justify-between">
-                    <div className="text-[11px] font-bold text-slate-700">配送時間:{formatTimeDisplay(c.deliveryTime)}</div>
+                    <div className="text-[11px] font-bold text-slate-700 tracking-wide">配送時間:{formatTimeDisplay(c.deliveryTime)}</div>
                     {c.deliveryMethod && <div className="text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-lg border border-gray-100">{c.deliveryMethod}</div>}
                   </div>
                   {c.defaultItems && c.defaultItems.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-100/50">{c.defaultItems.map((di, idx) => { const p = products.find(prod => prod.id === di.productId); return (<div key={idx} className="bg-white px-2 py-1 rounded-xl text-[10px] border border-gray-100 flex items-center gap-1 shadow-sm"><span className="font-bold text-slate-700">{p?.name || '未知品項'}</span><span className="font-black" style={{ color: COLORS.primary }}>{di.quantity}{di.unit || p?.unit || '斤'}</span></div>); })}</div>
-                  ) : (<div className="text-[10px] text-gray-300 font-medium italic pt-2 border-t border-gray-100/50">尚未設定預設品項</div>)}
+                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-200/50">{c.defaultItems.map((di, idx) => { const p = products.find(prod => prod.id === di.productId); return (<div key={idx} className="bg-white px-2 py-1 rounded-xl text-[10px] border border-gray-200 flex items-center gap-1 shadow-sm"><span className="font-bold text-slate-700">{p?.name || '未知品項'}</span><span className="font-extrabold text-morandi-blue">{di.quantity}{di.unit || p?.unit || '斤'}</span></div>); })}</div>
+                  ) : (<div className="text-[10px] text-gray-400 font-medium italic pt-2 border-t border-gray-200/50 tracking-wide">尚未設定預設品項</div>)}
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setCustomerForm({ ...c, deliveryTime: formatTimeForInput(c.deliveryTime) }); setIsEditingCustomer(c.id); setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤'); }} className="flex-1 py-3 bg-gray-50 rounded-2xl text-slate-700 font-bold text-xs flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors"><Edit2 className="w-3.5 h-3.5" /> 編輯資料</button>
-                  <button onClick={() => handleDeleteCustomer(c.id)} className="px-4 py-3 bg-gray-50 rounded-2xl text-rose-200 hover:text-rose-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                  <motion.button whileTap={buttonTap} onClick={() => { setCustomerForm({ ...c, deliveryTime: formatTimeForInput(c.deliveryTime) }); setIsEditingCustomer(c.id); setTempPriceProdId(''); setTempPriceValue(''); setTempPriceUnit('斤'); }} className="flex-1 py-3 bg-gray-50 rounded-2xl text-slate-700 font-bold text-xs flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors border border-gray-100"><Edit2 className="w-3.5 h-3.5" /> 編輯資料</motion.button>
+                  <motion.button whileTap={buttonTap} onClick={() => handleDeleteCustomer(c.id)} className="px-4 py-3 bg-gray-50 rounded-2xl text-morandi-pink hover:text-rose-500 transition-colors border border-gray-100"><Trash2 className="w-4 h-4" /></motion.button>
                 </div>
-              </div>
+              </motion.div>
             ))}
-            {filteredCustomers.length === 0 && <div className="text-center py-10 text-gray-300 text-sm font-bold">查無店家</div>}
-          </div>
+            </motion.div>
+            {filteredCustomers.length === 0 && <div className="text-center py-10 text-gray-300 text-sm font-bold tracking-wide">查無店家</div>}
+          </motion.div>
         )}
 
+        {/* ... (Products Tab Remains) ... */}
         {activeTab === 'products' && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <motion.div 
+            key="products"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            transition={{ duration: 0.2 }}
+            className="space-y-6"
+          >
             <div className="flex justify-between items-center px-1">
-              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Package className="w-5 h-5" style={{ color: COLORS.primary }} /> 品項清單</h2>
-              <button onClick={() => { setProductForm({ name: '', unit: '斤', price: 0 }); setIsEditingProduct('new'); }} className="p-3 rounded-2xl text-white shadow-lg" style={{ backgroundColor: COLORS.primary }}><Plus className="w-6 h-6" /></button>
+              <h2 className="text-xl font-extrabold text-morandi-charcoal flex items-center gap-2 tracking-tight"><Package className="w-5 h-5 text-morandi-blue" /> 品項清單</h2>
+              <motion.button whileTap={buttonTap} whileHover={buttonHover} onClick={() => { setProductForm({ name: '', unit: '斤', price: 0 }); setIsEditingProduct('new'); }} className="p-3 rounded-2xl text-white shadow-lg bg-morandi-blue hover:bg-slate-600 transition-colors"><Plus className="w-6 h-6" /></motion.button>
             </div>
-            <div className="grid grid-cols-1 gap-4">
+            <motion.div variants={containerVariants} initial="hidden" animate="show" className="grid grid-cols-1 gap-4">
               {products.map(p => (
-                <div key={p.id} className="bg-white rounded-[24px] p-5 shadow-sm border border-white flex justify-between items-center">
+                <motion.div variants={itemVariants} key={p.id} className="bg-white rounded-[24px] p-5 shadow-sm border border-slate-200 flex justify-between items-center hover:shadow-md transition-all">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center" style={{ color: COLORS.primary }}><Box className="w-5 h-5" /></div>
-                    <span className="font-bold text-slate-700">{p.name} <span className="text-[10px] text-gray-300 ml-1">({p.unit})</span></span>
-                    {p.price && p.price > 0 && <span className="ml-2 text-xs font-bold text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full">${p.price}</span>}
+                    <div className="w-10 h-10 rounded-xl bg-morandi-oatmeal flex items-center justify-center text-morandi-blue"><Box className="w-5 h-5" /></div>
+                    <span className="font-bold text-slate-800 tracking-wide">{p.name} <span className="text-[10px] text-gray-400 ml-1 font-medium">({p.unit})</span></span>
+                    {p.price && p.price > 0 && <span className="ml-2 text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full tracking-wide">${p.price}</span>}
                   </div>
-                  <div className="flex gap-2"><button onClick={() => { setProductForm(p); setIsEditingProduct(p.id); }} className="p-2 text-gray-300 hover:text-slate-600 transition-colors"><Edit2 className="w-4 h-4" /></button><button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-rose-100 hover:text-rose-400 transition-colors"><Trash2 className="w-4 h-4" /></button></div>
-                </div>
+                  <div className="flex gap-2"><motion.button whileTap={buttonTap} onClick={() => { setProductForm(p); setIsEditingProduct(p.id); }} className="p-2 text-gray-300 hover:text-slate-600 transition-colors"><Edit2 className="w-4 h-4" /></motion.button><motion.button whileTap={buttonTap} onClick={() => handleDeleteProduct(p.id)} className="p-2 text-rose-100 hover:text-rose-400 transition-colors"><Trash2 className="w-4 h-4" /></motion.button></div>
+                </motion.div>
               ))}
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         )}
 
+        {/* --- SCHEDULE (Order List) TAB REDESIGN START --- */}
         {activeTab === 'schedule' && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <motion.div 
+            key="schedule"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            transition={{ duration: 0.2 }}
+            className="space-y-6"
+          >
             <div className="px-1">
-              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-4">
-                <CalendarCheck className="w-5 h-5" style={{ color: COLORS.primary }} /> 配送行程
+              <h2 className="text-xl font-extrabold text-morandi-charcoal flex items-center gap-2 mb-4 tracking-tight">
+                <CalendarCheck className="w-5 h-5 text-morandi-blue" /> 配送行程
               </h2>
               
-              {/* 月曆 */}
               <div className="mb-6">
                 <WorkCalendar selectedDate={scheduleDate} onSelect={setScheduleDate} orders={orders} />
               </div>
 
-              {/* 新增：收款儀表板 (Driver Payment Dashboard) */}
-              <div className="bg-slate-800 rounded-[28px] p-5 shadow-lg text-white mb-6 relative overflow-hidden">
-                 <div className="absolute right-[-10px] bottom-[-20px] text-slate-700 opacity-20 rotate-12">
+              {/* Finance Dashboard */}
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.4, delay: 0.2 }}
+                className="bg-slate-700 rounded-[28px] p-5 shadow-lg text-white mb-6 relative overflow-hidden"
+              >
+                 <div className="absolute right-[-10px] bottom-[-20px] text-slate-600 opacity-20 rotate-12">
                     <Banknote className="w-32 h-32" />
                  </div>
                  <div className="flex justify-between items-start mb-2 relative z-10">
                     <div>
                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">本日應收總額</p>
-                       <h3 className="text-3xl font-black mt-1">${scheduleMoneySummary.totalReceivable.toLocaleString()}</h3>
+                       <h3 className="text-3xl font-black mt-1 text-white tracking-tight">${scheduleMoneySummary.totalReceivable.toLocaleString()}</h3>
                     </div>
                     <div className="text-right">
-                       <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">已收款</p>
-                       <h3 className="text-xl font-bold text-emerald-300 mt-1">${scheduleMoneySummary.totalCollected.toLocaleString()}</h3>
+                       <p className="text-[10px] font-bold text-morandi-green-text uppercase tracking-widest">已收款</p>
+                       <h3 className="text-xl font-bold text-emerald-300 mt-1 tracking-tight">${scheduleMoneySummary.totalCollected.toLocaleString()}</h3>
                     </div>
                  </div>
-                 <div className="w-full bg-slate-700 rounded-full h-1.5 mt-2 relative z-10">
-                    <div 
-                       className="bg-emerald-400 h-1.5 rounded-full transition-all duration-500" 
-                       style={{ width: `${scheduleMoneySummary.totalReceivable > 0 ? (scheduleMoneySummary.totalCollected / scheduleMoneySummary.totalReceivable) * 100 : 0}%` }}
-                    ></div>
+                 <div className="w-full bg-slate-600 rounded-full h-1.5 mt-2 relative z-10">
+                    <motion.div 
+                       className="bg-emerald-400 h-1.5 rounded-full" 
+                       initial={{ width: 0 }}
+                       animate={{ width: `${scheduleMoneySummary.totalReceivable > 0 ? (scheduleMoneySummary.totalCollected / scheduleMoneySummary.totalReceivable) * 100 : 0}%` }}
+                       transition={{ duration: 1, ease: "easeOut" }}
+                    />
                  </div>
-                 <p className="text-[9px] text-slate-400 mt-2 text-right relative z-10">
+                 <p className="text-[9px] text-slate-400 mt-2 text-right relative z-10 tracking-wide">
                     尚有 ${(scheduleMoneySummary.totalReceivable - scheduleMoneySummary.totalCollected).toLocaleString()} 未收
                  </p>
-              </div>
+              </motion.div>
 
-              {/* 新增：配送方式篩選器 */}
               <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-4">
-                  <button onClick={() => setScheduleDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${scheduleDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部方式</button>
-                  {DELIVERY_METHODS.map(m => { const isSelected = scheduleDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setScheduleDeliveryMethodFilter(scheduleDeliveryMethodFilter.filter(x => x !== m)); } else { setScheduleDeliveryMethodFilter([...scheduleDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
+                  <button onClick={() => setScheduleDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${scheduleDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-200'}`}>全部方式</button>
+                  {DELIVERY_METHODS.map(m => { const isSelected = scheduleDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setScheduleDeliveryMethodFilter(scheduleDeliveryMethodFilter.filter(x => x !== m)); } else { setScheduleDeliveryMethodFilter([...scheduleDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-200'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
               </div>
 
               <div className="space-y-4">
                  <div className="flex justify-between items-center px-2">
-                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-2">
                        <Clock className="w-4 h-4" /> 配送明細 [{scheduleDate}]
                     </h3>
-                    <div className="text-xs font-bold text-gray-300">
+                    <div className="text-xs font-bold text-gray-300 tracking-wide">
                        共 {scheduleOrders.length} 筆訂單
                     </div>
                  </div>
 
+                 <motion.div variants={containerVariants} initial="hidden" animate="show">
                  {scheduleOrders.length > 0 ? (
                    scheduleOrders.map((order) => {
                      const totalAmount = calculateOrderTotalAmount(order);
+                     const statusConfig = getStatusStyles(order.status || OrderStatus.PENDING);
+                     
                      return (
-                       <div key={order.id} className="bg-white rounded-[24px] overflow-hidden shadow-sm border border-white transition-all">
-                          <div className="p-4 bg-gray-50/50 border-b border-gray-100 flex justify-between items-center">
-                             <div className="flex items-center gap-2">
-                                <span className="text-lg font-black text-slate-700">{formatTimeDisplay(order.deliveryTime)}</span>
-                                {order.deliveryMethod && (
-                                   <span className="text-[10px] font-bold text-gray-400 border border-gray-200 px-1.5 py-0.5 rounded-lg bg-white">
-                                      {order.deliveryMethod}
-                                   </span>
-                                )}
+                       <motion.div 
+                          variants={itemVariants} 
+                          key={order.id} 
+                          layout
+                          initial={false} // Prevent initial re-animation when sorting/filtering changes slightly
+                          animate={{ backgroundColor: statusConfig.cardBg, borderColor: statusConfig.cardBorder }}
+                          transition={{ duration: 0.4, ease: "easeOut" }}
+                          className="rounded-[32px] overflow-hidden shadow-sm border-2 mb-5 p-1 relative"
+                       >
+                          <div className="p-5">
+                             {/* Row 1: Time & Status Tag */}
+                             <div className="flex justify-between items-center mb-4">
+                                <div className="flex items-center gap-3">
+                                   <div className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors duration-300`} style={{ backgroundColor: statusConfig.tagBg, color: statusConfig.tagText }}>
+                                      <Clock className="w-3.5 h-3.5" />
+                                      {formatTimeDisplay(order.deliveryTime)}
+                                   </div>
+                                   {order.deliveryMethod && (
+                                      <span className="text-[10px] font-bold text-gray-400 bg-white/60 px-2 py-1 rounded-lg border border-black/5">
+                                         {order.deliveryMethod}
+                                      </span>
+                                   )}
+                                </div>
+                                
+                                {/* Custom Styled Select for Status Tag */}
+                                <div className="relative group">
+                                  <select 
+                                    value={order.status || OrderStatus.PENDING}
+                                    onChange={(e) => updateOrderStatus(order.id, e.target.value as OrderStatus)}
+                                    className={`
+                                      appearance-none pl-4 pr-9 py-2 rounded-xl text-xs font-extrabold cursor-pointer outline-none transition-all duration-300 border border-transparent hover:brightness-95
+                                    `}
+                                    style={{ backgroundColor: statusConfig.tagBg, color: statusConfig.tagText }}
+                                  >
+                                     <option value={OrderStatus.PENDING}>待處理</option>
+                                     <option value={OrderStatus.SHIPPED}>已配送</option>
+                                     <option value={OrderStatus.PAID}>已收款</option>
+                                  </select>
+                                  <ChevronDown 
+                                    className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-300 group-hover:rotate-180" 
+                                    style={{ color: statusConfig.iconColor }}
+                                  />
+                                </div>
                              </div>
-                             
-                             <div className="relative">
-                               <select 
-                                 value={order.status || OrderStatus.PENDING}
-                                 onChange={(e) => updateOrderStatus(order.id, e.target.value as OrderStatus)}
-                                 className={`
-                                   appearance-none pl-3 pr-8 py-1.5 rounded-xl text-xs font-bold border-none outline-none cursor-pointer transition-colors
-                                   ${(order.status === OrderStatus.PENDING || !order.status) ? 'bg-gray-200 text-gray-600' : ''}
-                                   ${order.status === OrderStatus.SHIPPED ? 'bg-blue-100 text-blue-600' : ''}
-                                   ${order.status === OrderStatus.PAID ? 'bg-green-100 text-green-700' : ''}
-                                 `}
-                               >
-                                  <option value={OrderStatus.PENDING}>待出貨</option>
-                                  <option value={OrderStatus.SHIPPED}>已出貨</option>
-                                  <option value={OrderStatus.PAID}>已出貨收款</option>
-                               </select>
-                               <ChevronDown className="w-3 h-3 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-50" />
-                             </div>
-                          </div>
 
-                          <div className="p-4">
-                             <div className="flex justify-between items-start mb-3">
-                                <h4 className="font-bold text-slate-800 text-base flex-1">
+                             {/* Row 2: Customer & Price */}
+                             <div className="flex justify-between items-end mb-5">
+                                <h4 className="font-extrabold text-slate-800 text-xl tracking-tight leading-none">
                                     {order.customerName}
                                 </h4>
                                 <div className="flex flex-col items-end">
-                                    <span className="font-black text-amber-600">${totalAmount.toLocaleString()}</span>
-                                    <div className="flex gap-2 mt-1">
-                                      {/* 分享按鈕 */}
-                                      <button onClick={() => handleShareOrder(order)} className="text-slate-400 hover:text-slate-600 flex items-center gap-0.5 text-[10px] font-bold">
-                                         <Share2 className="w-3 h-3" /> 分享
-                                      </button>
-                                      {/* 地圖按鈕 */}
-                                      <button onClick={() => openGoogleMaps(order.customerName)} className="text-blue-400 hover:text-blue-600 flex items-center gap-0.5 text-[10px] font-bold">
-                                         <MapPin className="w-3 h-3" /> 導航
-                                      </button>
-                                    </div>
+                                    <span className="font-mono font-black text-xl text-morandi-charcoal tracking-tight">
+                                       <span className="text-sm text-gray-400 mr-1">$</span>
+                                       {totalAmount.toLocaleString()}
+                                    </span>
                                 </div>
                              </div>
                              
-                             <div className="space-y-1.5">
+                             {/* Row 3: Spacious Items List */}
+                             <div className="space-y-2">
                                 {order.items.map((item, idx) => {
                                    const p = products.find(prod => prod.id === item.productId || prod.name === item.productId);
                                    return (
-                                     <div key={idx} className="flex justify-between items-center text-xs border-b border-gray-50 last:border-0 pb-1 last:pb-0">
-                                        <span className="text-gray-600 font-medium">{p?.name || item.productId}</span>
-                                        <span className="font-bold text-slate-700">
-                                           {item.quantity} {item.unit || p?.unit || '斤'}
-                                        </span>
+                                     <div key={idx} className="flex justify-between items-center py-2 px-3 bg-white/60 rounded-[16px] border border-black/5">
+                                        <span className="text-sm font-bold text-slate-600 tracking-wide">{p?.name || item.productId}</span>
+                                        <div className="flex items-baseline gap-1">
+                                           <span className="font-black text-lg text-slate-800">{item.quantity}</span>
+                                           <span className="text-[10px] font-bold text-gray-400">{item.unit || p?.unit || '斤'}</span>
+                                        </div>
                                      </div>
                                    );
                                 })}
                              </div>
-                             {order.note && (
-                                <div className="mt-3 pt-2 border-t border-gray-100 text-[10px] text-gray-400 italic">
-                                   備註: {order.note}
-                                </div>
-                             )}
+
+                             {/* Row 4: Actions & Note */}
+                             <div className="mt-4 pt-3 border-t border-black/5 flex justify-between items-center">
+                                 <div className="flex gap-2">
+                                    <motion.button whileTap={buttonTap} onClick={() => handleShareOrder(order)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-400 hover:text-slate-600 hover:shadow-sm transition-all border border-black/5">
+                                       <Share2 className="w-4 h-4" />
+                                    </motion.button>
+                                    <motion.button whileTap={buttonTap} onClick={() => openGoogleMaps(order.customerName)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-blue-400 hover:text-blue-600 hover:shadow-sm transition-all border border-black/5">
+                                       <MapPin className="w-4 h-4" />
+                                    </motion.button>
+                                 </div>
+                                 {order.note && (
+                                    <div className="text-[10px] font-bold text-gray-400 bg-white/40 px-3 py-1.5 rounded-lg max-w-[60%] truncate">
+                                       備註: {order.note}
+                                    </div>
+                                 )}
+                             </div>
                           </div>
-                       </div>
+                       </motion.div>
                      );
                    })
                  ) : (
                     <div className="text-center py-10">
-                       <p className="text-gray-300 font-bold text-sm">本日無配送行程</p>
+                       <p className="text-gray-300 font-bold text-sm tracking-wide">本日無配送行程</p>
                     </div>
                  )}
+                 </motion.div>
               </div>
             </div>
-          </div>
+          </motion.div>
         )}
+        {/* --- SCHEDULE TAB REDESIGN END --- */}
 
+        {/* ... (Work Tab Remains) ... */}
         {activeTab === 'work' && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <motion.div 
+            key="work"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            transition={{ duration: 0.2 }}
+            className="space-y-6"
+          >
             <div className="px-1">
-              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-4"><FileText className="w-5 h-5" style={{ color: COLORS.primary }} /> 工作小抄</h2>
+              <h2 className="text-xl font-extrabold text-morandi-charcoal flex items-center gap-2 mb-4 tracking-tight"><FileText className="w-5 h-5 text-morandi-blue" /> 工作小抄</h2>
               <div className="space-y-3 mb-4">
                 <div className="relative">
                   <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" />
-                  <input type="text" placeholder="篩選特定店家..." className="w-full pl-12 pr-6 py-4 bg-white rounded-[24px] border-none shadow-sm text-slate-800 font-bold focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300 text-sm" value={workCustomerFilter} onChange={(e) => setWorkCustomerFilter(e.target.value)} />
+                  <input type="text" placeholder="篩選特定店家..." className="w-full pl-12 pr-6 py-4 bg-white rounded-[24px] border border-slate-100 shadow-sm text-slate-800 font-bold tracking-wide focus:ring-2 focus:ring-morandi-blue transition-all placeholder:text-gray-300 text-sm" value={workCustomerFilter} onChange={(e) => setWorkCustomerFilter(e.target.value)} />
                   {workCustomerFilter && <button onClick={() => setWorkCustomerFilter('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"><X className="w-4 h-4" /></button>}
                 </div>
                 
+                {/* ... (Filters - same logic but check styles) ... */}
                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-2">
-                  <button onClick={() => setWorkDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部方式</button>
-                  {DELIVERY_METHODS.map(m => { const isSelected = workDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setWorkDeliveryMethodFilter(workDeliveryMethodFilter.filter(x => x !== m)); } else { setWorkDeliveryMethodFilter([...workDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
+                  <button onClick={() => setWorkDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-200'}`}>全部方式</button>
+                  {DELIVERY_METHODS.map(m => { const isSelected = workDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setWorkDeliveryMethodFilter(workDeliveryMethodFilter.filter(x => x !== m)); } else { setWorkDeliveryMethodFilter([...workDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-200'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
                 </div>
 
                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
-                  <button onClick={() => setWorkProductFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workProductFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-100'}`}>全部麵種</button>
-                  {products.map(p => { const isSelected = workProductFilter.includes(p.name); return (<button key={p.id} onClick={() => { if (isSelected) { setWorkProductFilter(workProductFilter.filter(name => name !== p.name)); } else { setWorkProductFilter([...workProductFilter, p.name]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-100'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{p.name}</button>); })}
+                  <button onClick={() => setWorkProductFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workProductFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-200'}`}>全部麵種</button>
+                  {products.map(p => { const isSelected = workProductFilter.includes(p.name); return (<button key={p.id} onClick={() => { if (isSelected) { setWorkProductFilter(workProductFilter.filter(name => name !== p.name)); } else { setWorkProductFilter([...workProductFilter, p.name]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-200'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{p.name}</button>); })}
                 </div>
               </div>
               <div className="mb-6"><WorkCalendar selectedDate={workDates} onSelect={setWorkDates} orders={orders} /></div>
               <div className="space-y-4">
                 <div className="flex justify-between items-center px-2">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2"><ListChecks className="w-4 h-4" /> 生產總表 [{workDates.length}天]</h3>
-                  <div className="flex items-center gap-2"><span className="text-[10px] font-bold text-gray-300">{workSheetData.length} 種品項</span><button onClick={handlePrint} className="bg-slate-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-slate-800 transition-colors shadow-sm active:scale-95"><Printer className="w-3.5 h-3.5" /> 列印 / 匯出 PDF</button></div>
+                  <h3 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-2"><ListChecks className="w-4 h-4" /> 生產總表 [{workDates.length}天]</h3>
+                  <div className="flex items-center gap-2"><span className="text-[10px] font-bold text-gray-300 tracking-wide">{workSheetData.length} 種品項</span><motion.button whileTap={buttonTap} onClick={handlePrint} className="bg-slate-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-slate-800 transition-colors shadow-sm active:scale-95"><Printer className="w-3.5 h-3.5" /> 列印 / 匯出 PDF</motion.button></div>
                 </div>
+                <motion.div variants={containerVariants} initial="hidden" animate="show">
                 {workSheetData.length > 0 ? (
                   workSheetData.map((item, idx) => (
-                    <div key={idx} className="bg-white rounded-[24px] overflow-hidden shadow-sm border border-white">
-                      <div className="p-5 flex justify-between items-center bg-gray-50/50"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-sm" style={{ color: COLORS.primary }}><span className="font-black text-lg">{idx + 1}</span></div><div><h3 className="font-bold text-slate-800 text-lg">{item.name}</h3><p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">總需求量</p></div></div><div className="text-right"><span className="font-black text-3xl text-slate-800">{item.totalQty}</span><span className="text-xs text-gray-400 font-bold ml-1">{item.unit}</span></div></div>
-                      <div className="p-4 bg-white space-y-2 border-t border-gray-100">{item.details.map((detail, dIdx) => (<div key={dIdx} className="flex justify-between items-center py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"><span className="text-sm font-bold text-slate-600">{detail.customerName}</span><span className="text-sm font-bold text-slate-400">{detail.qty} {item.unit}</span></div>))}</div>
-                    </div>
+                    <motion.div variants={itemVariants} key={idx} className="bg-white rounded-[24px] overflow-hidden shadow-sm border border-slate-200 mb-3">
+                      <div className="p-5 flex justify-between items-center bg-gray-50/50"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-sm border border-slate-100" style={{ color: COLORS.primary }}><span className="font-black text-lg">{idx + 1}</span></div><div><h3 className="font-bold text-slate-800 text-lg tracking-tight">{item.name}</h3><p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">總需求量</p></div></div><div className="text-right"><span className="font-black text-3xl text-slate-800 tracking-tight">{item.totalQty}</span><span className="text-xs text-gray-400 font-bold ml-1">{item.unit}</span></div></div>
+                      <div className="p-4 bg-white space-y-2 border-t border-gray-100">{item.details.map((detail, dIdx) => (<div key={dIdx} className="flex justify-between items-center py-2 px-2 hover:bg-gray-50 rounded-lg transition-colors"><span className="text-sm font-bold text-slate-600 tracking-wide">{detail.customerName}</span><span className="text-sm font-bold text-slate-400">{detail.qty} {item.unit}</span></div>))}</div>
+                    </motion.div>
                   ))
-                ) : (<div className="text-center py-10"><div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4"><WifiOff className="w-8 h-8 text-gray-300" /></div><p className="text-gray-300 font-bold text-sm">所選日期無生產需求</p><p className="text-xs text-gray-200 mt-1">請選擇其他日期或調整篩選條件</p></div>)}
+                ) : (<div className="text-center py-10"><div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4"><WifiOff className="w-8 h-8 text-gray-300" /></div><p className="text-gray-300 font-bold text-sm tracking-wide">所選日期無生產需求</p><p className="text-xs text-gray-200 mt-1">請選擇其他日期或調整篩選條件</p></div>)}
+                </motion.div>
               </div>
             </div>
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </main>
 
+      {/* ... (Modals and Footer remain unchanged) ... */}
       {/* --- 彈窗模組 --- */}
-      {isDatePickerOpen && <DatePickerModal selectedDate={selectedDate} onSelect={setSelectedDate} onClose={() => setIsDatePickerOpen(false)} />}
+      <AnimatePresence>
+        {isDatePickerOpen && <DatePickerModal selectedDate={selectedDate} onSelect={setSelectedDate} onClose={() => setIsDatePickerOpen(false)} />}
+      </AnimatePresence>
       
+      <AnimatePresence>
       {isSettingsOpen && (
         <SettingsModal 
           onClose={() => setIsSettingsOpen(false)} 
@@ -1861,6 +1656,7 @@ const App: React.FC = () => {
           onSaveUrl={handleSaveApiUrl}
         />
       )}
+      </AnimatePresence>
       
       {/* 確認對話框 (最上層) */}
       <ConfirmModal 
@@ -1872,19 +1668,26 @@ const App: React.FC = () => {
       />
       
       {/* 追加訂單彈窗 */}
+      <AnimatePresence>
       {quickAddData && (
-        <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
-           <div className="bg-white w-full max-w-xs rounded-[32px] overflow-hidden shadow-2xl animate-in zoom-in duration-200">
-              <div className="p-5 bg-gray-50 border-b border-gray-100"><h3 className="text-center font-bold text-gray-800">追加訂單</h3><p className="text-center text-xs text-gray-400 font-bold">{quickAddData.customerName}</p></div>
+        <div className="fixed inset-0 bg-morandi-charcoal/40 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+           <motion.div 
+              variants={modalVariants}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className="bg-white w-full max-w-xs rounded-[32px] overflow-hidden shadow-xl border border-slate-200"
+           >
+              <div className="p-5 bg-morandi-oatmeal/30 border-b border-gray-100"><h3 className="text-center font-extrabold text-morandi-charcoal text-lg">追加訂單</h3><p className="text-center text-xs text-morandi-pebble font-bold tracking-wide">{quickAddData.customerName}</p></div>
               <div className="p-6 space-y-4">
-                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">追加品項</label><select className="w-full bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none" value={quickAddData.productId} onChange={(e) => { const p = products.find(x => x.id === e.target.value); setQuickAddData({...quickAddData, productId: e.target.value, unit: p?.unit || '斤'}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-1">數量與單位</label>
+                <div className="space-y-1"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-1">追加品項</label><select className="w-full bg-morandi-oatmeal/50 p-4 rounded-xl font-bold text-morandi-charcoal border border-slate-200 outline-none focus:ring-2 focus:ring-morandi-blue transition-all" value={quickAddData.productId} onChange={(e) => { const p = products.find(x => x.id === e.target.value); setQuickAddData({...quickAddData, productId: e.target.value, unit: p?.unit || '斤'}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+                <div className="space-y-1"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-1">數量與單位</label>
                 <div className="flex items-center gap-2">
                     <button onClick={() => setQuickAddData({...quickAddData, quantity: Math.max(0, quickAddData.quantity - 5)})} className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center font-bold text-gray-500">-</button>
                     <div className="flex-1 flex gap-2">
-                       <input type="number" className="w-full bg-gray-50 p-4 rounded-xl text-center font-black text-xl text-slate-800 outline-none" value={quickAddData.quantity} onChange={(e) => setQuickAddData({...quickAddData, quantity: parseInt(e.target.value) || 0})} />
+                       <input type="number" className="w-full bg-morandi-oatmeal/50 p-4 rounded-xl text-center font-black text-xl text-morandi-charcoal border border-slate-200 outline-none focus:ring-2 focus:ring-morandi-blue transition-all" value={quickAddData.quantity} onChange={(e) => setQuickAddData({...quickAddData, quantity: parseInt(e.target.value) || 0})} />
                        {/* 單位選擇下拉選單 */}
-                       <select value={quickAddData.unit || '斤'} onChange={(e) => setQuickAddData({...quickAddData, unit: e.target.value})} className="w-24 bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none">
+                       <select value={quickAddData.unit || '斤'} onChange={(e) => setQuickAddData({...quickAddData, unit: e.target.value})} className="w-24 bg-morandi-oatmeal/50 p-4 rounded-xl font-bold text-morandi-charcoal border border-slate-200 outline-none focus:ring-2 focus:ring-morandi-blue transition-all">
                           {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                        </select>
                     </div>
@@ -1892,8 +1695,14 @@ const App: React.FC = () => {
                 </div></div>
                 
                 {/* 價格預覽區塊 */}
+                <AnimatePresence>
                 {quickAddData.productId && (
-                   <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 flex justify-between items-center animate-in fade-in slide-in-from-top-1">
+                   <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="bg-morandi-amber-bg p-4 rounded-xl border border-amber-100 flex justify-between items-center"
+                   >
                       {(() => {
                          const preview = getQuickAddPricePreview();
                          if (!preview) return null;
@@ -1902,12 +1711,12 @@ const App: React.FC = () => {
                              return (
                                 <>
                                    <div className="flex flex-col">
-                                      <span className="text-[10px] font-bold text-amber-600/70 uppercase tracking-widest">自動換算</span>
-                                      <span className="text-xs font-medium text-amber-700/60 mt-0.5">{preview.formula}</span>
+                                      <span className="text-[10px] font-bold text-morandi-amber-text/70 uppercase tracking-widest">自動換算</span>
+                                      <span className="text-xs font-medium text-morandi-amber-text/60 mt-0.5 tracking-wide">{preview.formula}</span>
                                    </div>
                                    <div className="text-right">
-                                       <span className="text-2xl font-black text-amber-500">{preview.convertedDisplay}</span>
-                                       <p className="text-[10px] text-amber-400 font-bold">(約 ${preview.total})</p>
+                                       <span className="text-2xl font-black text-morandi-amber-text tracking-tight">{preview.convertedDisplay}</span>
+                                       <p className="text-[10px] text-morandi-amber-text font-bold">(約 ${preview.total})</p>
                                    </div>
                                 </>
                              );
@@ -1916,53 +1725,70 @@ const App: React.FC = () => {
                          return (
                             <>
                                <div className="flex flex-col">
-                                  <span className="text-[10px] font-bold text-amber-600/70 uppercase tracking-widest">預估金額</span>
-                                  <span className="text-xs font-medium text-amber-700/60 mt-0.5">{preview.formula}</span>
+                                  <span className="text-[10px] font-bold text-morandi-amber-text/70 uppercase tracking-widest">預估金額</span>
+                                  <span className="text-xs font-medium text-morandi-amber-text/60 mt-0.5 tracking-wide">{preview.formula}</span>
                                </div>
-                               <span className="text-2xl font-black text-amber-500">${preview.total}</span>
+                               <span className="text-2xl font-black text-morandi-amber-text tracking-tight">${preview.total}</span>
                             </>
                          );
                       })()}
-                   </div>
+                   </motion.div>
                 )}
+                </AnimatePresence>
               </div>
-              <div className="p-4 flex gap-2"><button onClick={() => setQuickAddData(null)} className="flex-1 py-3 rounded-2xl font-bold text-gray-400 hover:bg-gray-50 transition-colors">取消</button><button onClick={handleQuickAddSubmit} className="flex-1 py-3 rounded-2xl font-bold text-white shadow-lg transition-all active:scale-95" style={{ backgroundColor: COLORS.primary }}>確認追加</button></div>
-           </div>
+              <div className="p-4 flex gap-2"><motion.button whileTap={buttonTap} onClick={() => setQuickAddData(null)} className="flex-1 py-3 rounded-[16px] font-bold text-morandi-pebble hover:bg-gray-50 transition-colors border border-slate-200">取消</motion.button><motion.button whileTap={buttonTap} onClick={handleQuickAddSubmit} className="flex-1 py-3 rounded-[16px] font-bold text-white shadow-md bg-morandi-blue hover:bg-slate-600">確認追加</motion.button></div>
+           </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {isAddingOrder && (
-        <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
-          <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsAddingOrder(false)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">建立配送訂單</h2><button onClick={handleSaveOrder} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>{isSaving ? '儲存中...' : '儲存'}</button></div>
+        <div className="fixed inset-0 bg-morandi-oatmeal z-[60] flex flex-col">
+          <motion.div 
+            initial={{ opacity: 0, y: "100%" }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            className="flex flex-col h-full"
+          >
+          <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><motion.button whileTap={buttonTap} onClick={() => setIsAddingOrder(false)} className="p-2 rounded-2xl bg-gray-50 text-morandi-pebble"><X className="w-6 h-6" /></motion.button><h2 className="text-lg font-extrabold text-morandi-charcoal tracking-tight">建立配送訂單</h2><motion.button whileTap={buttonTap} onClick={handleSaveOrder} disabled={isSaving} className="font-bold px-4 py-2 transition-colors text-morandi-blue disabled:text-gray-300">{isSaving ? '儲存中...' : '儲存'}</motion.button></div>
           <div className="p-6 space-y-6 overflow-y-auto pb-10">
-            <div className="flex bg-white p-1 rounded-[24px] shadow-sm"><button onClick={() => setOrderForm({...orderForm, customerType: 'existing'})} className={`flex-1 py-4 rounded-[20px] text-xs font-bold transition-all ${orderForm.customerType === 'existing' ? 'bg-sage-600 text-white shadow-md' : 'text-gray-400'}`} style={{ backgroundColor: orderForm.customerType === 'existing' ? COLORS.primary : '' }}>現有客戶</button><button onClick={() => setOrderForm({...orderForm, customerType: 'retail', customerId: ''})} className={`flex-1 py-4 rounded-[20px] text-xs font-bold transition-all ${orderForm.customerType === 'retail' ? 'bg-sage-600 text-white shadow-md' : 'text-gray-400'}`} style={{ backgroundColor: orderForm.customerType === 'retail' ? COLORS.primary : '' }}>零售客戶</button></div>
+            <div className="flex bg-white p-1 rounded-[24px] shadow-sm border border-slate-100"><button onClick={() => setOrderForm({...orderForm, customerType: 'existing'})} className={`flex-1 py-4 rounded-[20px] text-xs font-bold transition-all tracking-wide ${orderForm.customerType === 'existing' ? 'bg-morandi-blue text-white shadow-md' : 'text-morandi-pebble'}`}>現有客戶</button><button onClick={() => setOrderForm({...orderForm, customerType: 'retail', customerId: ''})} className={`flex-1 py-4 rounded-[20px] text-xs font-bold transition-all tracking-wide ${orderForm.customerType === 'retail' ? 'bg-morandi-blue text-white shadow-md' : 'text-morandi-pebble'}`}>零售客戶</button></div>
             {orderForm.customerType === 'existing' ? (
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送店家 (今日營業)</label>
+                <label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">配送店家 (今日營業)</label>
                 <div className="relative">
-                  <button onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)} className="w-full p-5 bg-white rounded-[24px] shadow-sm flex justify-between items-center font-bold text-slate-800 focus:ring-2 focus:ring-[#8e9775] transition-all"><span className="flex items-center gap-2">{orderForm.customerName || "選擇店家..."}{orderForm.customerName && groupedOrders[orderForm.customerName] && (<span className="bg-amber-400 text-white text-[9px] px-2 py-0.5 rounded-full">已建立</span>)}</span>{isCustomerDropdownOpen ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}</button>
+                  <motion.button whileTap={buttonTap} onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)} className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 flex justify-between items-center font-bold text-morandi-charcoal focus:ring-2 focus:ring-morandi-blue transition-all"><span className="flex items-center gap-2">{orderForm.customerName || "選擇店家..."}{orderForm.customerName && groupedOrders[orderForm.customerName] && (<span className="bg-amber-400 text-white text-[9px] px-2 py-0.5 rounded-full tracking-wide">已建立</span>)}</span>{isCustomerDropdownOpen ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}</motion.button>
+                  <AnimatePresence>
                   {isCustomerDropdownOpen && (
-                    <div className="mt-2 bg-white rounded-[24px] shadow-lg border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mt-2 bg-white rounded-[24px] shadow-lg border border-gray-100 overflow-hidden"
+                    >
                       <div className="max-h-60 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                        {activeCustomersForDate.map(c => { const hasOrder = !!groupedOrders[c.name]; const isSelected = orderForm.customerId === c.id; return (<button key={c.id} onClick={() => handleSelectExistingCustomer(c.id)} className={`w-full p-4 rounded-[20px] text-xs font-bold text-left flex justify-between items-center transition-all ${isSelected ? 'bg-sage-600 text-white' : hasOrder ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'hover:bg-gray-50 text-slate-600'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}><span>{c.name}</span>{hasOrder && !isSelected && <span className="text-[9px] bg-amber-200 text-amber-800 px-2 py-1 rounded-full">已建立</span>}{isSelected && <CheckCircle2 className="w-4 h-4 text-white" />}</button>); })}
-                        {activeCustomersForDate.length === 0 && <div className="p-4 text-center text-gray-300 text-xs">今日無營業店家</div>}
+                        {activeCustomersForDate.map(c => { const hasOrder = !!groupedOrders[c.name]; const isSelected = orderForm.customerId === c.id; return (<motion.button whileTap={buttonTap} key={c.id} onClick={() => handleSelectExistingCustomer(c.id)} className={`w-full p-4 rounded-[20px] text-xs font-bold text-left flex justify-between items-center transition-all tracking-wide ${isSelected ? 'bg-morandi-blue text-white' : hasOrder ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'hover:bg-gray-50 text-slate-600'}`}><span>{c.name}</span>{hasOrder && !isSelected && <span className="text-[9px] bg-amber-200 text-amber-800 px-2 py-1 rounded-full">已建立</span>}{isSelected && <CheckCircle2 className="w-4 h-4 text-white" />}</motion.button>); })}
+                        {activeCustomersForDate.length === 0 && <div className="p-4 text-center text-gray-300 text-xs tracking-wide">今日無營業店家</div>}
                       </div>
-                    </div>
+                    </motion.div>
                   )}
+                  </AnimatePresence>
                 </div>
               </div>
-            ) : (<div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">客戶名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="輸入零售名稱..." value={orderForm.customerName} onChange={(e) => setOrderForm({...orderForm, customerName: e.target.value})} /></div>)}
+            ) : (<div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">客戶名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 text-morandi-charcoal font-bold outline-none focus:ring-2 focus:ring-morandi-blue transition-all" placeholder="輸入零售名稱..." value={orderForm.customerName} onChange={(e) => setOrderForm({...orderForm, customerName: e.target.value})} /></div>)}
             
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送設定</label>
+            <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">配送設定</label>
             <div className="flex gap-2">
               <div className="flex-1">
-                <input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={orderForm.deliveryTime} onChange={(e) => setOrderForm({...orderForm, deliveryTime: e.target.value})} />
+                <input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 text-morandi-charcoal font-bold outline-none focus:ring-2 focus:ring-morandi-blue transition-all" value={orderForm.deliveryTime} onChange={(e) => setOrderForm({...orderForm, deliveryTime: e.target.value})} />
               </div>
               <div className="flex-1">
                 <select 
                    value={orderForm.deliveryMethod} 
                    onChange={(e) => setOrderForm({...orderForm, deliveryMethod: e.target.value})}
-                   className="w-full h-full p-5 bg-white rounded-[24px] shadow-sm text-slate-800 font-bold border-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all appearance-none"
+                   className="w-full h-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 text-morandi-charcoal font-bold outline-none focus:ring-2 focus:ring-morandi-blue transition-all appearance-none"
                 >
                    <option value="">配送方式...</option>
                    {DELIVERY_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
@@ -1970,20 +1796,20 @@ const App: React.FC = () => {
               </div>
             </div></div>
 
-            <div className="space-y-4"><div className="flex justify-between items-center"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">品項明細</label><button onClick={() => setOrderForm({...orderForm, items: [...orderForm.items, {productId: '', quantity: 10, unit: '斤'}]})} className="text-[10px] font-bold" style={{ color: COLORS.primary }}><Plus className="w-3 h-3 inline mr-1" /> 增加品項</button></div>{orderForm.items.map((item, idx) => (<div key={idx} className="bg-white p-5 rounded-[28px] shadow-sm flex items-center gap-2 animate-in slide-in-from-right duration-200 flex-wrap"><select className="w-full sm:flex-1 bg-gray-50 p-4 rounded-xl text-sm font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all mb-2 sm:mb-0" value={item.productId} onChange={(e) => { const n = [...orderForm.items]; n[idx].productId = e.target.value; setOrderForm({...orderForm, items: n}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><div className="flex items-center gap-2 w-full sm:w-auto justify-between"><input type="number" className="w-20 bg-gray-50 p-4 rounded-xl text-center font-bold border-none text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={item.quantity} onChange={(e) => { const n = [...orderForm.items]; n[idx].quantity = parseInt(e.target.value)||0; setOrderForm({...orderForm, items: n}); }} />
-            <select value={item.unit || '斤'} onChange={(e) => { const n = [...orderForm.items]; n[idx].unit = e.target.value; setOrderForm({...orderForm, items: n}); }} className="w-20 bg-gray-50 p-4 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all">{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select>
-            <button onClick={() => { const n = orderForm.items.filter((_, i) => i !== idx); setOrderForm({...orderForm, items: n.length ? n : [{productId:'', quantity:10, unit:'斤'}]}); }} className="p-2 text-rose-100 hover:text-rose-300 transition-colors"><Trash2 className="w-4 h-4" /></button></div></div>))}</div>
+            <div className="space-y-4"><div className="flex justify-between items-center"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">品項明細</label><button onClick={() => setOrderForm({...orderForm, items: [...orderForm.items, {productId: '', quantity: 10, unit: '斤'}]})} className="text-[10px] font-bold text-morandi-blue tracking-wide"><Plus className="w-3 h-3 inline mr-1" /> 增加品項</button></div>{orderForm.items.map((item, idx) => (<motion.div layout initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} key={idx} className="bg-white p-5 rounded-[28px] shadow-sm border border-slate-200 flex items-center gap-2 flex-wrap"><select className="w-full sm:flex-1 bg-morandi-oatmeal/50 p-4 rounded-xl text-sm font-bold border border-slate-100 text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all mb-2 sm:mb-0" value={item.productId} onChange={(e) => { const n = [...orderForm.items]; n[idx].productId = e.target.value; setOrderForm({...orderForm, items: n}); }}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><div className="flex items-center gap-2 w-full sm:w-auto justify-between"><input type="number" className="w-20 bg-morandi-oatmeal/50 p-4 rounded-xl text-center font-bold border border-slate-100 text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all" value={item.quantity} onChange={(e) => { const n = [...orderForm.items]; n[idx].quantity = parseInt(e.target.value)||0; setOrderForm({...orderForm, items: n}); }} />
+            <select value={item.unit || '斤'} onChange={(e) => { const n = [...orderForm.items]; n[idx].unit = e.target.value; setOrderForm({...orderForm, items: n}); }} className="w-20 bg-morandi-oatmeal/50 p-4 rounded-xl font-bold text-morandi-charcoal border border-slate-100 outline-none focus:ring-2 focus:ring-morandi-blue transition-all">{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select>
+            <motion.button whileTap={buttonTap} onClick={() => { const n = orderForm.items.filter((_, i) => i !== idx); setOrderForm({...orderForm, items: n.length ? n : [{productId:'', quantity:10, unit:'斤'}]}); }} className="p-2 text-morandi-pink hover:text-rose-300 transition-colors"><Trash2 className="w-4 h-4" /></motion.button></div></motion.div>))}</div>
 
             {/* --- 新增：訂單預覽與金額試算區塊 --- */}
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">訂單預覽與金額試算</label>
-              <div className="bg-amber-50 rounded-[24px] p-5 shadow-sm border border-amber-100/50">
+              <label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">訂單預覽與金額試算</label>
+              <div className="bg-morandi-amber-bg rounded-[24px] p-5 shadow-sm border border-amber-100/50">
                   <div className="flex justify-between items-center mb-3 border-b border-amber-100 pb-2">
-                      <div className="flex items-center gap-2 text-amber-700">
+                      <div className="flex items-center gap-2 text-morandi-amber-text">
                          <Calculator className="w-4 h-4" />
-                         <span className="text-xs font-bold">預估清單</span>
+                         <span className="text-xs font-bold tracking-wide">預估清單</span>
                       </div>
-                      <div className="text-xs font-bold text-amber-600/60">
+                      <div className="text-xs font-bold text-morandi-amber-text/60 tracking-wide">
                          共 {orderSummary.details.filter(d => d.rawQty > 0).length} 項
                       </div>
                   </div>
@@ -1991,7 +1817,7 @@ const App: React.FC = () => {
                       {orderSummary.details.filter(d => d.rawQty > 0).map((detail, i) => (
                           <div key={i} className="flex justify-between items-center text-sm">
                              <div className="flex flex-col">
-                                <span className="font-bold text-slate-700">{detail.name}</span>
+                                <span className="font-bold text-slate-700 tracking-wide">{detail.name}</span>
                                 {detail.isCalculated && (
                                    <span className="text-[10px] text-gray-400">
                                      (以單價 ${detail.unitPrice} 換算: {detail.rawQty}元 &rarr; {detail.displayQty}{detail.displayUnit})
@@ -2002,42 +1828,53 @@ const App: React.FC = () => {
                                 <span className="font-bold text-slate-600">
                                    {detail.displayQty} {detail.displayUnit}
                                 </span>
-                                <span className="font-black text-amber-600 w-12 text-right">
+                                <span className="font-black text-amber-600 w-12 text-right tracking-tight">
                                    ${detail.subtotal}
                                 </span>
                              </div>
                           </div>
                       ))}
                       {orderSummary.details.filter(d => d.rawQty > 0).length === 0 && (
-                          <div className="text-center text-xs text-amber-400 italic py-2">尚未加入有效品項</div>
+                          <div className="text-center text-xs text-amber-400 italic py-2 tracking-wide">尚未加入有效品項</div>
                       )}
                   </div>
                   <div className="flex justify-between items-center pt-3 border-t border-amber-200">
-                      <span className="text-xs font-bold text-amber-700">預估總金額</span>
-                      <span className="text-xl font-black text-amber-600">${orderSummary.totalPrice}</span>
+                      <span className="text-xs font-bold text-amber-700 tracking-wide">預估總金額</span>
+                      <span className="text-xl font-black text-amber-600 tracking-tight">${orderSummary.totalPrice}</span>
                   </div>
               </div>
             </div>
 
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">訂單備註</label><textarea className="w-full p-5 bg-white rounded-[24px] shadow-sm text-slate-700 font-bold border-none resize-none outline-none focus:ring-2 focus:ring-[#8e9775] transition-all placeholder:text-gray-300" rows={3} placeholder="備註特殊需求..." value={orderForm.note} onChange={(e) => setOrderForm({...orderForm, note: e.target.value})} /></div>
+            <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">訂單備註</label><textarea className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 text-morandi-charcoal font-bold resize-none outline-none focus:ring-2 focus:ring-morandi-blue transition-all placeholder:text-gray-300" rows={3} placeholder="備註特殊需求..." value={orderForm.note} onChange={(e) => setOrderForm({...orderForm, note: e.target.value})} /></div>
           </div>
+          </motion.div>
         </div>
       )}
-       {isEditingCustomer && (
-        <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
-          <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsEditingCustomer(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">店家詳細資料</h2><button onClick={handleSaveCustomer} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>完成儲存</button></div>
-          <div className="p-6 space-y-6 overflow-y-auto pb-10">
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">基本資訊</label><div className="space-y-4"><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="店名" value={customerForm.name || ''} onChange={(e) => setCustomerForm({...customerForm, name: e.target.value})} /><input type="tel" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="電話" value={customerForm.phone || ''} onChange={(e) => setCustomerForm({...customerForm, phone: e.target.value})} /></div></div>
+      </AnimatePresence>
 
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">配送設定</label>
+      <AnimatePresence>
+       {isEditingCustomer && (
+        <div className="fixed inset-0 bg-morandi-oatmeal z-[60] flex flex-col">
+          <motion.div 
+            initial={{ opacity: 0, y: "100%" }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            className="flex flex-col h-full"
+          >
+          <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><motion.button whileTap={buttonTap} onClick={() => setIsEditingCustomer(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-morandi-pebble" /></motion.button><h2 className="text-lg font-extrabold text-morandi-charcoal tracking-tight">店家詳細資料</h2><motion.button whileTap={buttonTap} onClick={handleSaveCustomer} disabled={isSaving} className="font-bold px-4 py-2 transition-colors text-morandi-blue disabled:text-gray-300">{isSaving ? '儲存中...' : '儲存'}</motion.button></div>
+          <div className="p-6 space-y-6 overflow-y-auto pb-10">
+            <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">基本資訊</label><div className="space-y-4"><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all" placeholder="店名" value={customerForm.name || ''} onChange={(e) => setCustomerForm({...customerForm, name: e.target.value})} /><input type="tel" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all" placeholder="電話" value={customerForm.phone || ''} onChange={(e) => setCustomerForm({...customerForm, phone: e.target.value})} /></div></div>
+
+            {/* ... (Inside Edit Customer - similar border and typography updates applied below) ... */}
+            <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">配送設定</label>
             <div className="space-y-4">
-               {/* 新增：配送方式 */}
                <div className="space-y-1">
                  <label className="text-[10px] font-bold text-gray-400 pl-1">配送方式</label>
                  <select 
                     value={customerForm.deliveryMethod || ''} 
                     onChange={(e) => setCustomerForm({...customerForm, deliveryMethod: e.target.value})}
-                    className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all appearance-none"
+                    className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all appearance-none"
                  >
                     <option value="">選擇配送方式...</option>
                     {DELIVERY_METHODS.map(method => (
@@ -2046,7 +1883,7 @@ const App: React.FC = () => {
                  </select>
                </div>
 
-               <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">配送時間</label><input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={customerForm.deliveryTime || '08:00'} onChange={(e) => setCustomerForm({...customerForm, deliveryTime: e.target.value})} /></div>
+               <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">配送時間</label><input type="time" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" value={customerForm.deliveryTime || '08:00'} onChange={(e) => setCustomerForm({...customerForm, deliveryTime: e.target.value})} /></div>
                
                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">每週公休</label>
                <div className="flex gap-2">{WEEKDAYS.map(d => {
@@ -2055,28 +1892,28 @@ const App: React.FC = () => {
                      const current = customerForm.offDays || [];
                      const newOff = isOff ? current.filter(x => x !== d.value) : [...current, d.value];
                      setCustomerForm({...customerForm, offDays: newOff});
-                  }} className={`w-10 h-10 rounded-xl font-bold text-xs transition-all ${isOff ? 'bg-rose-500 text-white shadow-md' : 'bg-white text-gray-400'}`}>{d.label}</button>);
+                  }} className={`w-10 h-10 rounded-xl font-bold text-xs transition-all ${isOff ? 'bg-rose-500 text-white shadow-md' : 'bg-white text-gray-400 border border-slate-200'}`}>{d.label}</button>);
                })}</div></div>
 
                <div className="space-y-1"><label className="text-[10px] font-bold text-gray-400 pl-1">特定公休</label>
                <div className="flex flex-wrap gap-2">
                  {(customerForm.holidayDates || []).map(date => (
-                    <span key={date} className="bg-rose-50 text-rose-500 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1">{date} <button onClick={() => setCustomerForm({...customerForm, holidayDates: customerForm.holidayDates?.filter(d => d !== date)})}><X className="w-3 h-3" /></button></span>
+                    <span key={date} className="bg-rose-50 text-rose-500 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 border border-rose-100">{date} <button onClick={() => setCustomerForm({...customerForm, holidayDates: customerForm.holidayDates?.filter(d => d !== date)})}><X className="w-3 h-3" /></button></span>
                  ))}
-                 <button onClick={() => setHolidayEditorId('new')} className="bg-gray-100 text-gray-400 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-gray-200"><Plus className="w-3 h-3" /> 新增日期</button>
+                 <button onClick={() => setHolidayEditorId('new')} className="bg-gray-50 text-gray-400 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-gray-100 border border-slate-200"><Plus className="w-3 h-3" /> 新增日期</button>
                </div></div>
             </div></div>
 
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">預設品項</label>
+            <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">預設品項</label>
             <div className="space-y-3">
                {(customerForm.defaultItems || []).map((item, idx) => (
                   <div key={idx} className="flex gap-2">
-                     <select className="flex-1 p-3 bg-white rounded-xl text-sm font-bold text-slate-700 outline-none" value={item.productId} onChange={(e) => {
+                     <select className="flex-1 p-3 bg-white rounded-xl text-sm font-bold text-slate-700 outline-none border border-slate-200" value={item.productId} onChange={(e) => {
                         const newItems = [...(customerForm.defaultItems || [])];
                         newItems[idx] = { ...item, productId: e.target.value };
                         setCustomerForm({...customerForm, defaultItems: newItems});
                      }}><option value="">選擇品項</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-                     <input type="number" className="w-16 p-3 bg-white rounded-xl text-center font-bold text-slate-700 outline-none" value={item.quantity} onChange={(e) => {
+                     <input type="number" className="w-16 p-3 bg-white rounded-xl text-center font-bold text-slate-700 outline-none border border-slate-200" value={item.quantity} onChange={(e) => {
                         const newItems = [...(customerForm.defaultItems || [])];
                         newItems[idx].quantity = Number(e.target.value);
                         setCustomerForm({...customerForm, defaultItems: newItems});
@@ -2085,21 +1922,21 @@ const App: React.FC = () => {
                         const newItems = [...(customerForm.defaultItems || [])];
                         newItems[idx].unit = e.target.value;
                         setCustomerForm({...customerForm, defaultItems: newItems});
-                     }} className="w-20 p-3 bg-white rounded-xl font-bold text-slate-700 outline-none">
+                     }} className="w-20 p-3 bg-white rounded-xl font-bold text-slate-700 outline-none border border-slate-200">
                         {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                      </select>
                      <button onClick={() => setCustomerForm({...customerForm, defaultItems: customerForm.defaultItems?.filter((_, i) => i !== idx)})} className="p-3 bg-rose-50 text-rose-400 rounded-xl"><Trash2 className="w-4 h-4" /></button>
                   </div>
                ))}
-               <button onClick={() => setCustomerForm({...customerForm, defaultItems: [...(customerForm.defaultItems || []), {productId: '', quantity: 10, unit: '斤'}]})} className="w-full py-3 rounded-xl border border-dashed border-gray-300 text-gray-400 font-bold text-xs flex items-center justify-center gap-1 hover:bg-gray-50"><Plus className="w-4 h-4" /> 新增預設品項</button>
+               <button onClick={() => setCustomerForm({...customerForm, defaultItems: [...(customerForm.defaultItems || []), {productId: '', quantity: 10, unit: '斤'}]})} className="w-full py-3 rounded-xl border border-dashed border-gray-300 text-gray-400 font-bold text-xs flex items-center justify-center gap-1 hover:bg-gray-50 tracking-wide"><Plus className="w-4 h-4" /> 新增預設品項</button>
             </div></div>
 
-            <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">專屬價目表</label>
-            <div className="bg-amber-50 p-4 rounded-[24px] space-y-3">
+            <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">專屬價目表</label>
+            <div className="bg-amber-50 p-4 rounded-[24px] space-y-3 border border-amber-100">
                <div className="flex gap-2">
-                  <select className="flex-1 p-3 bg-white rounded-xl text-sm font-bold text-slate-700 outline-none" value={tempPriceProdId} onChange={(e) => setTempPriceProdId(e.target.value)}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-                  <input type="number" placeholder="單價" className="w-20 p-3 bg-white rounded-xl text-center font-bold text-slate-700 outline-none" value={tempPriceValue} onChange={(e) => setTempPriceValue(e.target.value)} />
-                  <select value={tempPriceUnit} onChange={(e) => setTempPriceUnit(e.target.value)} className="w-20 p-3 bg-white rounded-xl font-bold text-slate-700 outline-none">
+                  <select className="flex-1 p-3 bg-white rounded-xl text-sm font-bold text-slate-700 outline-none border border-slate-100" value={tempPriceProdId} onChange={(e) => setTempPriceProdId(e.target.value)}><option value="">選擇品項...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                  <input type="number" placeholder="單價" className="w-20 p-3 bg-white rounded-xl text-center font-bold text-slate-700 outline-none border border-slate-100" value={tempPriceValue} onChange={(e) => setTempPriceValue(e.target.value)} />
+                  <select value={tempPriceUnit} onChange={(e) => setTempPriceUnit(e.target.value)} className="w-20 p-3 bg-white rounded-xl font-bold text-slate-700 outline-none border border-slate-100">
                      {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
                   <button onClick={() => {
@@ -2121,10 +1958,10 @@ const App: React.FC = () => {
                   {(customerForm.priceList || []).map((pl, idx) => {
                      const p = products.find(prod => prod.id === pl.productId);
                      return (
-                        <div key={idx} className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm">
-                           <span className="text-sm font-bold text-slate-700">{p?.name || pl.productId}</span>
+                        <div key={idx} className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm border border-slate-100">
+                           <span className="text-sm font-bold text-slate-700 tracking-wide">{p?.name || pl.productId}</span>
                            <div className="flex items-center gap-3">
-                              <span className="font-black text-amber-500">${pl.price} <span className="text-xs text-gray-400">/ {pl.unit || '斤'}</span></span>
+                              <span className="font-black text-amber-500 tracking-tight">${pl.price} <span className="text-xs text-gray-400 font-bold">/ {pl.unit || '斤'}</span></span>
                               <button onClick={() => setCustomerForm({...customerForm, priceList: customerForm.priceList?.filter((_, i) => i !== idx)})} className="text-gray-300 hover:text-rose-400"><X className="w-4 h-4" /></button>
                            </div>
                         </div>
@@ -2133,19 +1970,31 @@ const App: React.FC = () => {
                </div>
             </div></div>
           </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {isEditingProduct && (
-         <div className="fixed inset-0 bg-[#f4f1ea] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300">
-           <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><button onClick={() => setIsEditingProduct(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-gray-400" /></button><h2 className="text-lg font-bold text-slate-800">品項資料</h2><button onClick={handleSaveProduct} disabled={isSaving} className="font-bold px-4 py-2 transition-colors" style={{ color: isSaving ? '#ccc' : COLORS.primary }}>完成儲存</button></div>
+         <div className="fixed inset-0 bg-morandi-oatmeal z-[60] flex flex-col">
+           <motion.div 
+            initial={{ opacity: 0, y: "100%" }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            className="flex flex-col h-full"
+           >
+           <div className="bg-white p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10"><motion.button whileTap={buttonTap} onClick={() => setIsEditingProduct(null)} className="p-2 rounded-2xl bg-gray-50"><X className="w-6 h-6 text-morandi-pebble" /></motion.button><h2 className="text-lg font-extrabold text-morandi-charcoal tracking-tight">品項資料</h2><motion.button whileTap={buttonTap} onClick={handleSaveProduct} disabled={isSaving} className="font-bold px-4 py-2 transition-colors text-morandi-blue disabled:text-gray-300">完成儲存</motion.button></div>
            <div className="p-6 space-y-6">
-              <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">品項名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如：油麵 (小)" value={productForm.name || ''} onChange={(e) => setProductForm({...productForm, name: e.target.value})} /></div>
-              <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">計算單位</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如：斤" value={productForm.unit || ''} onChange={(e) => setProductForm({...productForm, unit: e.target.value})} /></div>
-              <div className="space-y-2"><label className="text-[10px] font-bold text-gray-300 uppercase tracking-widest px-2">預設單價</label><input type="number" className="w-full p-5 bg-white rounded-[24px] shadow-sm border-none font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#8e9775] transition-all" placeholder="例如：35" value={productForm.price || ''} onChange={(e) => setProductForm({...productForm, price: Number(e.target.value)})} /></div>
+              <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">品項名稱</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all" placeholder="例如：油麵 (小)" value={productForm.name || ''} onChange={(e) => setProductForm({...productForm, name: e.target.value})} /></div>
+              <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">計算單位</label><input type="text" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all" placeholder="例如：斤" value={productForm.unit || ''} onChange={(e) => setProductForm({...productForm, unit: e.target.value})} /></div>
+              <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest px-2">預設單價</label><input type="number" className="w-full p-5 bg-white rounded-[24px] shadow-sm border border-slate-200 font-bold text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue transition-all" placeholder="例如：35" value={productForm.price || ''} onChange={(e) => setProductForm({...productForm, price: Number(e.target.value)})} /></div>
            </div>
+           </motion.div>
          </div>
       )}
+      </AnimatePresence>
       
       {holidayEditorId && (
          <HolidayCalendar 
