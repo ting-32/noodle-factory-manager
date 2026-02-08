@@ -32,6 +32,7 @@ export interface Customer {
   phone: string;
   deliveryTime: string;
   deliveryMethod?: string; // 新增：配送方式
+  paymentTerm?: 'daily' | 'weekly' | 'monthly'; // 新增：付款週期
   defaultItems: DefaultItem[]; // 儲存產品 ID 與 預設數量
   priceList?: CustomerPrice[]; // 新增：專屬價目表
   offDays: number[]; // 0-6 (Sun-Sat) - 週期性公休

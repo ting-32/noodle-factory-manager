@@ -19,7 +19,8 @@ const SHEETS = {
 // 初始化表格結構
 function setup() {
   // 設定 Header
-  SHEETS.CUSTOMERS.getRange(1, 1, 1, 9).setValues([["ID", "客戶名稱", "電話", "配送時間", "預設品項JSON", "公休日週期JSON", "特定公休日JSON", "價目表JSON", "配送方式"]]);
+  // 新增欄位: 付款週期 (第 10 欄)
+  SHEETS.CUSTOMERS.getRange(1, 1, 1, 10).setValues([["ID", "客戶名稱", "電話", "配送時間", "預設品項JSON", "公休日週期JSON", "特定公休日JSON", "價目表JSON", "配送方式", "付款週期"]]);
   // 設定 JSON 欄位為純文字格式，避免 Google Sheets 自動格式化導致讀取錯誤
   SHEETS.CUSTOMERS.getRange(2, 5, SHEETS.CUSTOMERS.getMaxRows() - 1, 4).setNumberFormat("@");
   
@@ -68,6 +69,12 @@ function doPost(e) {
         break;
       case "updateOrderStatus":
         result = updateOrderStatus(params.data);
+        break;
+      case "reorderProducts": // 新增：產品排序
+        result = reorderProducts(params.data);
+        break;
+      case "batchUpdatePaymentStatus": // 新增：批次付款更新
+        result = batchUpdatePaymentStatus(params.data);
         break;
       default:
         throw new Error("Unknown action: " + action);
@@ -179,12 +186,29 @@ function updateOrderStatus(data) {
   return true;
 }
 
+function batchUpdatePaymentStatus(data) {
+  // data: { customerName: string, orderIds: string[], newStatus: 'PAID' }
+  const sheet = SHEETS.ORDERS;
+  const values = sheet.getDataRange().getValues();
+  const orderIdSet = new Set(data.orderIds.map(String));
+  let updateCount = 0;
+
+  for (let i = 1; i < values.length; i++) {
+    const rowOrderId = String(values[i][1]).trim();
+    if (orderIdSet.has(rowOrderId)) {
+      sheet.getRange(i + 1, 9).setValue(data.newStatus);
+      updateCount++;
+    }
+  }
+  return updateCount;
+}
+
 function updateCustomer(customer) {
   const sheet = SHEETS.CUSTOMERS;
   
-  const headerRange = sheet.getRange(1, 9);
-  if (headerRange.getValue() !== "配送方式") {
-    headerRange.setValue("配送方式");
+  const headerRange = sheet.getRange(1, 10);
+  if (headerRange.getValue() !== "付款週期") {
+    headerRange.setValue("付款週期");
   }
 
   const values = sheet.getDataRange().getValues();
@@ -215,11 +239,12 @@ function updateCustomer(customer) {
     JSON.stringify(customer.offDays || []),
     JSON.stringify(customer.holidayDates || []),
     JSON.stringify(customer.priceList || []),
-    customer.deliveryMethod || ""
+    customer.deliveryMethod || "",
+    customer.paymentTerm || "daily"
   ];
 
   if (rowIndex !== -1) {
-    sheet.getRange(rowIndex, 1, 1, 9).setValues([rowData]);
+    sheet.getRange(rowIndex, 1, 1, 10).setValues([rowData]);
   } else {
     sheet.appendRow(rowData);
   }
@@ -251,6 +276,43 @@ function updateProduct(product) {
   } else {
     sheet.appendRow(rowData);
   }
+  return true;
+}
+
+function reorderProducts(orderedIds) {
+  const sheet = SHEETS.PRODUCTS;
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const dataRows = values.slice(1);
+  
+  // 建立 ID 到 RowData 的 Map
+  const rowMap = new Map();
+  dataRows.forEach(row => {
+    const id = String(row[0]).trim();
+    rowMap.set(id, row);
+  });
+  
+  // 根據 orderedIds 重建新的 rows 陣列
+  const newRows = [];
+  orderedIds.forEach(id => {
+    if (rowMap.has(id)) {
+      newRows.push(rowMap.get(id));
+      rowMap.delete(id); // 移除已處理的
+    }
+  });
+  
+  // 將剩餘未在 orderedIds 中的項目 (防呆) 加到最後
+  rowMap.forEach(row => {
+    newRows.push(row);
+  });
+  
+  // 清空舊資料並寫入新排序資料
+  // 注意：我們保留 Header (Row 1)
+  if (newRows.length > 0) {
+    sheet.getRange(2, 1, sheet.getMaxRows() - 1, headers.length).clearContent();
+    sheet.getRange(2, 1, newRows.length, headers.length).setValues(newRows);
+  }
+  
   return true;
 }
 
