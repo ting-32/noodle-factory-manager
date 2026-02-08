@@ -45,7 +45,9 @@ import {
   Copy,
   MapPin,
   Banknote,
-  Share2
+  Share2,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem, CustomerPrice } from './types';
@@ -57,22 +59,21 @@ const containerVariants: Variants = {
   show: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.08,
-      delayChildren: 0.1
+      staggerChildren: 0.05,
+      delayChildren: 0.05
     }
   }
 };
 
 const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 20, scale: 0.98 },
+  hidden: { opacity: 0, y: 15 },
   show: { 
     opacity: 1, 
     y: 0,
-    scale: 1,
     transition: { 
       type: "spring", 
-      stiffness: 260, 
-      damping: 20 
+      stiffness: 300, 
+      damping: 24 
     } 
   }
 };
@@ -213,6 +214,7 @@ const formatTimeForInput = (time: any) => {
   return '08:00';
 };
 
+// ... (LoginScreen, ConfirmModal, HolidayCalendar, WorkCalendar, DatePickerModal, SettingsModal, NavItem components remain the same) ...
 // --- 子組件：登入畫面 ---
 const LoginScreen: React.FC<{ onLogin: (password: string) => Promise<boolean> }> = ({ onLogin }) => {
   const [inputVal, setInputVal] = useState('');
@@ -322,7 +324,6 @@ const LoginScreen: React.FC<{ onLogin: (password: string) => Promise<boolean> }>
   );
 };
 
-// ... (ConfirmModal, HolidayCalendar, WorkCalendar, DatePickerModal, SettingsModal, NavItem components remain unchanged) ...
 // --- 子組件：自訂確認視窗 ---
 const ConfirmModal: React.FC<{
   isOpen: boolean;
@@ -839,6 +840,10 @@ const App: React.FC = () => {
   
   const [scheduleDate, setScheduleDate] = useState<string>(getTomorrowDate());
   const [scheduleDeliveryMethodFilter, setScheduleDeliveryMethodFilter] = useState<string[]>([]);
+  
+  // --- New State for Batch Selection in Schedule ---
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
 
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
@@ -887,6 +892,12 @@ const App: React.FC = () => {
   const [isEditingProduct, setIsEditingProduct] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<Partial<Product>>({});
   const [customerSearch, setCustomerSearch] = useState('');
+
+  // --- CRITICAL FIX: Reset Selection Mode on Tab Change ---
+  useEffect(() => {
+    setIsSelectionMode(false);
+    setSelectedOrderIds(new Set());
+  }, [activeTab]);
 
   // ... (保留 useMemo 和運算邏輯) ...
   const orderSummary = useMemo(() => {
@@ -1178,6 +1189,37 @@ const App: React.FC = () => {
     setOrders([newOrder, ...orders]); setIsSaving(false); setQuickAddData(null);
   };
   const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => { const previousOrders = [...orders]; setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateOrderStatus', data: { id: orderId, status: newStatus } }) }); } } catch (e) { console.error("狀態更新失敗", e); alert("狀態更新失敗，請檢查網路。"); setOrders(previousOrders); } };
+  
+  // --- New Batch Status Update Handler ---
+  const handleBatchUpdateStatus = async (newStatus: OrderStatus) => {
+    if (selectedOrderIds.size === 0) return;
+    
+    // Optimistic Update
+    const previousOrders = [...orders];
+    const idsToUpdate = Array.from(selectedOrderIds);
+    
+    setOrders(prev => prev.map(o => idsToUpdate.includes(o.id) ? { ...o, status: newStatus } : o));
+    setIsSelectionMode(false);
+    setSelectedOrderIds(new Set());
+
+    try {
+      if (apiEndpoint) {
+        // Since backend API handles one by one, we loop (ideal world: update backend to accept batch)
+        // For now, let's just trigger multiple fetch calls. Parallel is okay for < 20 items.
+        await Promise.all(idsToUpdate.map(id => 
+           fetch(apiEndpoint, { 
+             method: 'POST', 
+             body: JSON.stringify({ action: 'updateOrderStatus', data: { id: id, status: newStatus } }) 
+           })
+        ));
+      }
+    } catch (e) {
+      console.error("Batch update failed", e);
+      alert("批量更新部分失敗，請檢查網路。");
+      setOrders(previousOrders);
+    }
+  };
+
   const executeDeleteOrder = async (orderId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const orderBackup = orders.find(o => o.id === orderId); if (!orderBackup) return; setOrders(prev => prev.filter(o => o.id !== orderId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteOrder', data: { id: orderId } }) }); } } catch (e) { console.error("刪除失敗:", e); alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。"); setOrders(prev => [...prev, orderBackup]); } };
   const executeDeleteCustomer = async (customerId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const customerBackup = customers.find(c => c.id === customerId); if (!customerBackup) return; setCustomers(prev => prev.filter(c => c.id !== customerId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteCustomer', data: { id: customerId } }) }); } } catch (e) { console.error("刪除失敗:", e); alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。"); setCustomers(prev => [...prev, customerBackup]); } };
   const executeDeleteProduct = async (productId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const productBackup = products.find(p => p.id === productId); if (!productBackup) return; setProducts(prev => prev.filter(p => p.id !== productId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteProduct', data: { id: productId } }) }); } } catch (e) { console.error("刪除失敗:", e); alert("雲端同步刪除失敗，請檢查網路或 API 設定。\n\n資料已自動還原。"); setProducts(prev => [...prev, productBackup]); } };
@@ -1206,7 +1248,7 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex-1 overflow-y-auto pb-24 px-4 pt-4">
-        {/* ... (Orders Tab Remains - Minor visual tweaks can be applied but leaving mostly as is for Schedule focus) ... */}
+        {/* ... (Orders Tab Remains) ... */}
         <AnimatePresence mode="wait">
         {activeTab === 'orders' && (
           <motion.div 
@@ -1248,7 +1290,7 @@ const App: React.FC = () => {
                   return (
                     <motion.div 
                         variants={itemVariants}
-                        layout
+                        // layout <--- REMOVED TO FIX CRASH
                         key={custName} 
                         className="bg-white rounded-[24px] shadow-sm border border-slate-200 overflow-hidden mb-3 hover:shadow-md transition-shadow duration-300"
                     >
@@ -1407,7 +1449,7 @@ const App: React.FC = () => {
           </motion.div>
         )}
 
-        {/* --- SCHEDULE (Order List) TAB REDESIGN START --- */}
+        {/* --- SCHEDULE (Order List) TAB REDESIGN --- */}
         {activeTab === 'schedule' && (
           <motion.div 
             key="schedule"
@@ -1459,12 +1501,17 @@ const App: React.FC = () => {
                  </p>
               </motion.div>
 
-              <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-4">
+              <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-4 items-center">
+                  <button onClick={() => setIsSelectionMode(!isSelectionMode)} className={`flex-shrink-0 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border flex items-center gap-1 ${isSelectionMode ? 'bg-rose-500 text-white border-rose-500' : 'bg-white text-morandi-blue border-morandi-blue'}`}>
+                     {isSelectionMode ? <X className="w-3.5 h-3.5" /> : <CheckSquare className="w-3.5 h-3.5" />}
+                     {isSelectionMode ? '取消選取' : '批量操作'}
+                  </button>
+                  <div className="w-[1px] h-6 bg-gray-300 mx-1"></div>
                   <button onClick={() => setScheduleDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${scheduleDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-200'}`}>全部方式</button>
                   {DELIVERY_METHODS.map(m => { const isSelected = scheduleDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setScheduleDeliveryMethodFilter(scheduleDeliveryMethodFilter.filter(x => x !== m)); } else { setScheduleDeliveryMethodFilter([...scheduleDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-200'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-4 pb-20">
                  <div className="flex justify-between items-center px-2">
                     <h3 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-2">
                        <Clock className="w-4 h-4" /> 配送明細 [{scheduleDate}]
@@ -1479,18 +1526,35 @@ const App: React.FC = () => {
                    scheduleOrders.map((order) => {
                      const totalAmount = calculateOrderTotalAmount(order);
                      const statusConfig = getStatusStyles(order.status || OrderStatus.PENDING);
+                     const isSelected = selectedOrderIds.has(order.id);
                      
                      return (
                        <motion.div 
                           variants={itemVariants} 
                           key={order.id} 
-                          layout
-                          initial={false} // Prevent initial re-animation when sorting/filtering changes slightly
-                          animate={{ backgroundColor: statusConfig.cardBg, borderColor: statusConfig.cardBorder }}
-                          transition={{ duration: 0.4, ease: "easeOut" }}
-                          className="rounded-[32px] overflow-hidden shadow-sm border-2 mb-5 p-1 relative"
+                          // layout <--- REMOVED TO FIX CRASH
+                          initial={false} 
+                          animate={{ backgroundColor: statusConfig.cardBg, borderColor: statusConfig.cardBorder, x: isSelectionMode ? 10 : 0 }}
+                          transition={{ duration: 0.3, ease: "easeOut" }}
+                          className={`rounded-[32px] overflow-hidden shadow-sm border-2 mb-5 p-1 relative ${isSelectionMode ? 'cursor-pointer' : ''}`}
+                          onClick={() => {
+                             if (!isSelectionMode) return;
+                             const newSet = new Set(selectedOrderIds);
+                             if (newSet.has(order.id)) newSet.delete(order.id);
+                             else newSet.add(order.id);
+                             setSelectedOrderIds(newSet);
+                          }}
                        >
-                          <div className="p-5">
+                          {isSelectionMode && (
+                             <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20">
+                                {isSelected ? 
+                                   <div className="w-6 h-6 rounded-lg bg-morandi-blue flex items-center justify-center text-white shadow-md"><CheckCircle2 className="w-4 h-4" /></div> : 
+                                   <div className="w-6 h-6 rounded-lg border-2 border-slate-300 bg-white" />
+                                }
+                             </div>
+                          )}
+
+                          <div className={`p-5 transition-all ${isSelectionMode ? 'pl-14' : ''}`}>
                              {/* Row 1: Time & Status Tag */}
                              <div className="flex justify-between items-center mb-4">
                                 <div className="flex items-center gap-3">
@@ -1506,12 +1570,14 @@ const App: React.FC = () => {
                                 </div>
                                 
                                 {/* Custom Styled Select for Status Tag */}
-                                <div className="relative group">
+                                <div className="relative group" onClick={(e) => isSelectionMode && e.stopPropagation()}>
                                   <select 
+                                    disabled={isSelectionMode}
                                     value={order.status || OrderStatus.PENDING}
                                     onChange={(e) => updateOrderStatus(order.id, e.target.value as OrderStatus)}
                                     className={`
                                       appearance-none pl-4 pr-9 py-2 rounded-xl text-xs font-extrabold cursor-pointer outline-none transition-all duration-300 border border-transparent hover:brightness-95
+                                      ${isSelectionMode ? 'opacity-50 pointer-events-none' : ''}
                                     `}
                                     style={{ backgroundColor: statusConfig.tagBg, color: statusConfig.tagText }}
                                   >
@@ -1558,10 +1624,10 @@ const App: React.FC = () => {
                              {/* Row 4: Actions & Note */}
                              <div className="mt-4 pt-3 border-t border-black/5 flex justify-between items-center">
                                  <div className="flex gap-2">
-                                    <motion.button whileTap={buttonTap} onClick={() => handleShareOrder(order)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-400 hover:text-slate-600 hover:shadow-sm transition-all border border-black/5">
+                                    <motion.button disabled={isSelectionMode} whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); handleShareOrder(order); }} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-400 hover:text-slate-600 hover:shadow-sm transition-all border border-black/5 disabled:opacity-50">
                                        <Share2 className="w-4 h-4" />
                                     </motion.button>
-                                    <motion.button whileTap={buttonTap} onClick={() => openGoogleMaps(order.customerName)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-blue-400 hover:text-blue-600 hover:shadow-sm transition-all border border-black/5">
+                                    <motion.button disabled={isSelectionMode} whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); openGoogleMaps(order.customerName); }} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-blue-400 hover:text-blue-600 hover:shadow-sm transition-all border border-black/5 disabled:opacity-50">
                                        <MapPin className="w-4 h-4" />
                                     </motion.button>
                                  </div>
@@ -1639,6 +1705,41 @@ const App: React.FC = () => {
         )}
         </AnimatePresence>
       </main>
+
+      {/* --- Batch Actions Floating Bar --- */}
+      <AnimatePresence>
+        {isSelectionMode && selectedOrderIds.size > 0 && (
+          <motion.div 
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-[80px] left-4 right-4 z-50 max-w-md mx-auto"
+          >
+            <div className="bg-morandi-charcoal rounded-[24px] p-4 shadow-2xl flex items-center justify-between gap-4">
+               <div className="flex-1 flex flex-col pl-2">
+                  <span className="text-white font-bold text-sm">已選 {selectedOrderIds.size} 筆</span>
+                  <span className="text-gray-400 text-[10px]">批量更新狀態</span>
+               </div>
+               <div className="flex gap-2">
+                  <motion.button 
+                    whileTap={buttonTap}
+                    onClick={() => handleBatchUpdateStatus(OrderStatus.SHIPPED)}
+                    className="px-4 py-2 bg-morandi-oatmeal text-morandi-charcoal rounded-xl font-bold text-xs shadow-sm flex items-center gap-1"
+                  >
+                    <Truck className="w-3.5 h-3.5" /> 已配送
+                  </motion.button>
+                  <motion.button 
+                    whileTap={buttonTap}
+                    onClick={() => handleBatchUpdateStatus(OrderStatus.PAID)}
+                    className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold text-xs shadow-sm flex items-center gap-1"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" /> 已收款
+                  </motion.button>
+               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ... (Modals and Footer remain unchanged) ... */}
       {/* --- 彈窗模組 --- */}
