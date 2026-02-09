@@ -10,7 +10,8 @@ export interface Product {
   id: string;
   name: string;
   unit: string;
-  price?: number; // 新增：預設單價
+  price?: number; // 預設單價
+  category?: string; // 新增：產品分類
 }
 
 export interface DefaultItem {
@@ -32,7 +33,9 @@ export interface Customer {
   phone: string;
   deliveryTime: string;
   deliveryMethod?: string; // 新增：配送方式
-  paymentTerm?: 'daily' | 'weekly' | 'monthly'; // 新增：付款週期
+  // 注意：我們沿用 paymentTerm 欄位來儲存「預定習慣」，以保持後端兼容性
+  // 值可能是: 'regular' (預訂), 'occasional' (非每日), 'adhoc' (非預訂), 或舊資料 'daily'/'weekly' 等
+  paymentTerm?: string; 
   defaultItems: DefaultItem[]; // 儲存產品 ID 與 預設數量
   priceList?: CustomerPrice[]; // 新增：專屬價目表
   offDays: number[]; // 0-6 (Sun-Sat) - 週期性公休

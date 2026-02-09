@@ -48,10 +48,28 @@ export const DELIVERY_METHODS = [
   '市場自取'
 ];
 
+// 新增：預定習慣 (取代原本單純的付款週期意義)
+// 這些值將儲存在 paymentTerm 欄位中以保持後端兼容
+export const ORDERING_HABITS = [
+  { value: 'regular', label: '預訂店家 (固定)', color: '#10B981', bgColor: '#D1FAE5' }, // Emerald
+  { value: 'occasional', label: '非每日預訂', color: '#F59E0B', bgColor: '#FEF3C7' }, // Amber
+  { value: 'adhoc', label: '非預訂 (散客)', color: '#6B7280', bgColor: '#F3F4F6' }, // Gray
+];
+
+// 保留此常數以供舊資料參考，但在UI中主要使用 ORDERING_HABITS
 export const PAYMENT_TERMS = [
   { value: 'daily', label: '現金/日結' },
   { value: 'weekly', label: '週結' },
   { value: 'monthly', label: '月結' },
+];
+
+// 新增：產品分類定義 (用於 ProductPicker)
+export const PRODUCT_CATEGORIES = [
+  { id: 'yellow', label: '油麵/黃麵類', color: '#FCD34D' }, // Amber-300
+  { id: 'white', label: '陽春/白麵類', color: '#F3F4F6' }, // Gray-100 (Whiteish)
+  { id: 'skin', label: '水餃/餛飩皮', color: '#FECDD3' }, // Rose-200
+  { id: 'rice', label: '米粉/冬粉', color: '#BFDBFE' }, // Blue-200
+  { id: 'other', label: '其他/醬料', color: '#E5E7EB' }  // Gray-200
 ];
 
 // --- 配置：GAS 部署網址 ---

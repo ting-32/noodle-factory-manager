@@ -19,14 +19,14 @@ const SHEETS = {
 // 初始化表格結構
 function setup() {
   // 設定 Header
-  // 新增欄位: 付款週期 (第 10 欄)
   SHEETS.CUSTOMERS.getRange(1, 1, 1, 10).setValues([["ID", "客戶名稱", "電話", "配送時間", "預設品項JSON", "公休日週期JSON", "特定公休日JSON", "價目表JSON", "配送方式", "付款週期"]]);
   // 設定 JSON 欄位為純文字格式，避免 Google Sheets 自動格式化導致讀取錯誤
   SHEETS.CUSTOMERS.getRange(2, 5, SHEETS.CUSTOMERS.getMaxRows() - 1, 4).setNumberFormat("@");
   
   SHEETS.ORDERS.getRange(1, 1, 1, 10).setValues([["建立時間", "訂單ID", "客戶名", "配送日期", "配送時間", "品項", "數量", "備註", "狀態", "配送方式"]]);
   
-  SHEETS.PRODUCTS.getRange(1, 1, 1, 4).setValues([["ID", "品項", "單位", "單價"]]);
+  // 更新：新增 "分類" 欄位 (第 5 欄)
+  SHEETS.PRODUCTS.getRange(1, 1, 1, 5).setValues([["ID", "品項", "單位", "單價", "分類"]]);
 
   // 初始化設定頁 (密碼)
   if (SHEETS.SETTINGS.getLastRow() === 0) {
@@ -43,10 +43,10 @@ function doPost(e) {
     let result;
 
     switch (action) {
-      case "login": // 新增：後端登入驗證
+      case "login":
         result = login(params.data);
         break;
-      case "changePassword": // 新增：後端更改密碼
+      case "changePassword":
         result = changePassword(params.data);
         break;
       case "createOrder":
@@ -70,10 +70,10 @@ function doPost(e) {
       case "updateOrderStatus":
         result = updateOrderStatus(params.data);
         break;
-      case "reorderProducts": // 新增：產品排序
+      case "reorderProducts":
         result = reorderProducts(params.data);
         break;
-      case "batchUpdatePaymentStatus": // 新增：批次付款更新
+      case "batchUpdatePaymentStatus":
         result = batchUpdatePaymentStatus(params.data);
         break;
       default:
@@ -92,16 +92,19 @@ function doPost(e) {
 function doGet(e) {
   try {
     const type = e.parameter.type;
+    const startDate = e.parameter.startDate; // Optional: format yyyy-MM-dd
+    
     let data;
 
     if (type === "init") {
       data = {
         customers: getSheetData(SHEETS.CUSTOMERS),
         products: getSheetData(SHEETS.PRODUCTS),
-        orders: getSheetData(SHEETS.ORDERS)
+        // Optimize: If startDate is provided, filter orders. Otherwise default to reasonable limit in frontend.
+        orders: getFilteredOrders(startDate)
       };
     } else if (type === "orders") {
-      data = getSheetData(SHEETS.ORDERS);
+      data = getFilteredOrders(startDate);
     }
 
     return ContentService.createTextOutput(JSON.stringify({ success: true, data: data }))
@@ -110,6 +113,23 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// --- Helper to Filter Orders ---
+function getFilteredOrders(startDateStr) {
+  const allOrders = getSheetData(SHEETS.ORDERS);
+  
+  if (!startDateStr) {
+    return allOrders;
+  }
+
+  // Simple string comparison works for yyyy-MM-dd format
+  return allOrders.filter(order => {
+    // Check '配送日期' or 'deliveryDate' depending on how getSheetData processes headers
+    const orderDate = order['配送日期'] || order['deliveryDate']; 
+    if (!orderDate) return false;
+    return orderDate >= startDateStr;
+  });
 }
 
 // --- 身份驗證邏輯 ---
@@ -187,7 +207,6 @@ function updateOrderStatus(data) {
 }
 
 function batchUpdatePaymentStatus(data) {
-  // data: { customerName: string, orderIds: string[], newStatus: 'PAID' }
   const sheet = SHEETS.ORDERS;
   const values = sheet.getDataRange().getValues();
   const orderIdSet = new Set(data.orderIds.map(String));
@@ -205,12 +224,6 @@ function batchUpdatePaymentStatus(data) {
 
 function updateCustomer(customer) {
   const sheet = SHEETS.CUSTOMERS;
-  
-  const headerRange = sheet.getRange(1, 10);
-  if (headerRange.getValue() !== "付款週期") {
-    headerRange.setValue("付款週期");
-  }
-
   const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
 
@@ -254,9 +267,11 @@ function updateCustomer(customer) {
 function updateProduct(product) {
   const sheet = SHEETS.PRODUCTS;
   
-  const headerRange = sheet.getRange(1, 4);
-  if (headerRange.getValue() !== "單價") {
-    headerRange.setValue("單價");
+  // 修正：檢查第 5 欄標題 (E1)，如果不是 "分類" 才進行更新
+  // 使用 getRange(1, 5).getValue() 取得單一儲存格的值
+  if (sheet.getRange(1, 5).getValue() !== "分類") {
+    // 重新設定 A1:E1 的標題
+    sheet.getRange(1, 1, 1, 5).setValues([["ID", "品項", "單位", "單價", "分類"]]);
   }
 
   const values = sheet.getDataRange().getValues();
@@ -269,10 +284,17 @@ function updateProduct(product) {
     }
   }
   
-  const rowData = [product.id, product.name, product.unit, product.price || 0];
+  // 寫入 5 個欄位：ID, Name, Unit, Price, Category
+  const rowData = [
+    product.id, 
+    product.name, 
+    product.unit, 
+    product.price || 0,
+    product.category || "other" // 預設分類
+  ];
 
   if (rowIndex !== -1) {
-    sheet.getRange(rowIndex, 1, 1, 4).setValues([rowData]);
+    sheet.getRange(rowIndex, 1, 1, 5).setValues([rowData]);
   } else {
     sheet.appendRow(rowData);
   }
@@ -285,29 +307,24 @@ function reorderProducts(orderedIds) {
   const headers = values[0];
   const dataRows = values.slice(1);
   
-  // 建立 ID 到 RowData 的 Map
   const rowMap = new Map();
   dataRows.forEach(row => {
     const id = String(row[0]).trim();
     rowMap.set(id, row);
   });
   
-  // 根據 orderedIds 重建新的 rows 陣列
   const newRows = [];
   orderedIds.forEach(id => {
     if (rowMap.has(id)) {
       newRows.push(rowMap.get(id));
-      rowMap.delete(id); // 移除已處理的
+      rowMap.delete(id); 
     }
   });
   
-  // 將剩餘未在 orderedIds 中的項目 (防呆) 加到最後
   rowMap.forEach(row => {
     newRows.push(row);
   });
   
-  // 清空舊資料並寫入新排序資料
-  // 注意：我們保留 Header (Row 1)
   if (newRows.length > 0) {
     sheet.getRange(2, 1, sheet.getMaxRows() - 1, headers.length).clearContent();
     sheet.getRange(2, 1, newRows.length, headers.length).setValues(newRows);
@@ -378,7 +395,6 @@ function getSheetData(sheet) {
         }
       }
       
-      // Robust JSON parsing: attempts to parse if it looks like a JSON array or object
       if (typeof val === "string" && (val.trim().startsWith("[") || val.trim().startsWith("{"))) {
         try { val = JSON.parse(val); } catch(e) {}
       }
