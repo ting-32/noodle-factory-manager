@@ -365,6 +365,14 @@ const ToastNotification: React.FC<{
         {toasts.map((toast) => (
           <motion.div
             key={toast.id}
+            drag="x"
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={0.7}
+            onDragEnd={(event, info) => {
+              if (Math.abs(info.offset.x) > 100) {
+                removeToast(toast.id);
+              }
+            }}
             initial={{ opacity: 0, y: 20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
