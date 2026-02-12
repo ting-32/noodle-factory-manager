@@ -307,7 +307,7 @@ const SortableProductItem: React.FC<{
   );
 };
 
-// --- Update: SwipeableOrderCard with Edit Button ---
+// --- SwipeableOrderCard with Edit Button ---
 const SwipeableOrderCard: React.FC<{
   order: Order;
   products: Product[];
@@ -418,6 +418,7 @@ const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false); // New state for background sync indicator
   const [isSaving, setIsSaving] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
@@ -625,9 +626,107 @@ const App: React.FC = () => {
   const handleChangePassword = async (oldPwd: string, newPwd: string) => { if (!apiEndpoint) return false; try { const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'changePassword', data: { oldPassword: oldPwd, newPassword: newPwd } }) }); const json = await res.json(); if (json.success && json.data === true) { return true; } return false; } catch (e) { console.error("Change Password Error:", e); return false; } };
   const handleSaveApiUrl = (newUrl: string) => { localStorage.setItem('nm_gas_url', newUrl); setApiEndpoint(newUrl); };
   
-  // FIX: Scalability Improvement ... (syncData logic unchanged) ...
-  const syncData = async () => { if (!apiEndpoint) { setIsInitialLoading(false); return; } setIsInitialLoading(true); try { const startDate = new Date(); startDate.setDate(startDate.getDate() - 60); const startDateStr = formatDateStr(startDate); const res = await fetch(`${apiEndpoint}?type=init&startDate=${startDateStr}`); const result: GASResponse<any> = await res.json(); if (result.success && result.data) { const mappedCustomers: Customer[] = (result.data.customers || []).map((c: any) => { const priceListKey = Object.keys(c).find(k => k.includes('價目表') || k.includes('Price') || k.includes('priceList')) || '價目表JSON'; return { id: String(c.ID || c.id || ''), name: c.客戶名稱 || c.name || '', phone: c.電話 || c.phone || '', deliveryTime: c.配送時間 || c.deliveryTime || '', deliveryMethod: c.配送方式 || c.deliveryMethod || '', paymentTerm: c.付款週期 || c.paymentTerm || 'daily', defaultItems: safeJsonArray(c.預設品項JSON || c.預設品項 || c.defaultItems), priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({ productId: pl.productId, price: Number(pl.price) || 0, unit: pl.unit || '斤' })), offDays: safeJsonArray(c.公休日週期JSON || c.公休日週期 || c.offDays), holidayDates: safeJsonArray(c.特定公休日JSON || c.特定公休日 || c.holidayDates) }; }); const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({ id: String(p.ID || p.id), name: p.品項 || p.name, unit: p.單位 || p.unit, price: Number(p.單價 || p.price) || 0, category: p.分類 || p.category || 'other' })); const rawOrders = result.data.orders || []; const orderMap: { [key: string]: Order } = {}; rawOrders.forEach((o: any) => { const oid = String(o.訂單ID || o.id); if (!orderMap[oid]) { const rawDate = o.配送日期 || o.deliveryDate; const normalizedDate = normalizeDate(rawDate); orderMap[oid] = { id: oid, createdAt: o.建立時間 || o.createdAt, customerName: o.客戶名 || o.customerName || '未知客戶', deliveryDate: normalizedDate, deliveryTime: o.配送時間 || o.deliveryTime, items: [], note: o.備註 || o.note || '', status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING, deliveryMethod: o.配送方式 || o.deliveryMethod || '' }; } const prodName = o.品項 || o.productName; const prod = mappedProducts.find(p => p.name === prodName); orderMap[oid].items.push({ productId: prod ? prod.id : prodName, quantity: Number(o.數量 || o.quantity) || 0, unit: o.unit || prod?.unit || '斤' }); }); setCustomers(mappedCustomers); setProducts(mappedProducts); setOrders(Object.values(orderMap)); setInitialProductOrder(mappedProducts.map(p => p.id)); setHasReorderedProducts(false); addToast('雲端資料已同步完成 (近60天)', 'success'); } } catch (e) { console.error("無法連線至雲端:", e); addToast("同步失敗，請檢查網路連線", 'error'); } finally { setIsInitialLoading(false); } };
-  useEffect(() => { if (isAuthenticated) { syncData(); } }, [isAuthenticated, apiEndpoint]);
+  // REFACTORED: syncData logic to support silent mode
+  const syncData = useCallback(async (isSilent = false) => { 
+    if (!apiEndpoint) { 
+      setIsInitialLoading(false); 
+      return; 
+    } 
+    
+    // Choose loading indicator based on mode
+    if (!isSilent) setIsInitialLoading(true);
+    else setIsBackgroundSyncing(true);
+
+    try { 
+      const startDate = new Date(); 
+      startDate.setDate(startDate.getDate() - 60); 
+      const startDateStr = formatDateStr(startDate); 
+      const res = await fetch(`${apiEndpoint}?type=init&startDate=${startDateStr}`); 
+      const result: GASResponse<any> = await res.json(); 
+      if (result.success && result.data) { 
+        const mappedCustomers: Customer[] = (result.data.customers || []).map((c: any) => { 
+          const priceListKey = Object.keys(c).find(k => k.includes('價目表') || k.includes('Price') || k.includes('priceList')) || '價目表JSON'; 
+          return { id: String(c.ID || c.id || ''), name: c.客戶名稱 || c.name || '', phone: c.電話 || c.phone || '', deliveryTime: c.配送時間 || c.deliveryTime || '', deliveryMethod: c.配送方式 || c.deliveryMethod || '', paymentTerm: c.付款週期 || c.paymentTerm || 'daily', defaultItems: safeJsonArray(c.預設品項JSON || c.預設品項 || c.defaultItems), priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({ productId: pl.productId, price: Number(pl.price) || 0, unit: pl.unit || '斤' })), offDays: safeJsonArray(c.公休日週期JSON || c.公休日週期 || c.offDays), holidayDates: safeJsonArray(c.特定公休日JSON || c.特定公休日 || c.holidayDates) }; 
+        }); 
+        const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({ id: String(p.ID || p.id), name: p.品項 || p.name, unit: p.單位 || p.unit, price: Number(p.單價 || p.price) || 0, category: p.分類 || p.category || 'other' })); 
+        const rawOrders = result.data.orders || []; 
+        const orderMap: { [key: string]: Order } = {}; 
+        rawOrders.forEach((o: any) => { 
+          const oid = String(o.訂單ID || o.id); 
+          if (!orderMap[oid]) { 
+            const rawDate = o.配送日期 || o.deliveryDate; 
+            const normalizedDate = normalizeDate(rawDate); 
+            orderMap[oid] = { id: oid, createdAt: o.建立時間 || o.createdAt, customerName: o.客戶名 || o.customerName || '未知客戶', deliveryDate: normalizedDate, deliveryTime: o.配送時間 || o.deliveryTime, items: [], note: o.備註 || o.note || '', status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING, deliveryMethod: o.配送方式 || o.deliveryMethod || '' }; 
+          } 
+          const prodName = o.品項 || o.productName; 
+          const prod = mappedProducts.find(p => p.name === prodName); 
+          orderMap[oid].items.push({ productId: prod ? prod.id : prodName, quantity: Number(o.數量 || o.quantity) || 0, unit: o.unit || prod?.unit || '斤' }); 
+        }); 
+        setCustomers(mappedCustomers); 
+        setProducts(mappedProducts); 
+        setOrders(Object.values(orderMap)); 
+        setInitialProductOrder(mappedProducts.map(p => p.id)); 
+        setHasReorderedProducts(false); 
+        
+        // Only show success toast for explicit user actions, not background sync
+        if (!isSilent) addToast('雲端資料已同步完成 (近60天)', 'success'); 
+      } 
+    } catch (e) { 
+      console.error("無法連線至雲端:", e); 
+      // Keep error toast even in silent mode? Optional, but safer to know if network fails consistently
+      addToast("同步失敗，請檢查網路連線", 'error'); 
+    } finally { 
+      setIsInitialLoading(false); 
+      setIsBackgroundSyncing(false);
+    } 
+  }, [apiEndpoint, addToast]); // Depend on API endpoint and toaster
+
+  // NEW: Automator Effect for Polling and Focus Refetch
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // 1. Define the silent sync executor with safety locks
+    const performSilentSync = () => {
+      // Safety Lock: Don't sync if user is editing
+      if (isAddingOrder || isEditingCustomer || isEditingProduct || quickAddData || editingOrderId) {
+        console.log("使用者忙碌中，略過背景同步");
+        return;
+      }
+      
+      // Execute sync in silent mode
+      syncData(true);
+    };
+
+    // 2. Initial Sync on mount (explicitly non-silent if needed, but handled by the original effect below if kept separate.
+    // However, to consolidate, we can rely on the original effect for initial load and this one for updates)
+    
+    // 3. Polling Logic (Every 60 seconds)
+    const intervalId = setInterval(performSilentSync, 60000);
+
+    // 4. Focus Logic (Revalidate on Focus)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        performSilentSync();
+      }
+    };
+    
+    const onWindowFocus = () => {
+        performSilentSync();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onWindowFocus);
+
+    // Cleanup
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onWindowFocus);
+    };
+  }, [isAuthenticated, syncData, isAddingOrder, isEditingCustomer, isEditingProduct, quickAddData, editingOrderId]);
+
+  // Keep original initial load effect for first render
+  useEffect(() => { if (isAuthenticated) { syncData(false); } }, [isAuthenticated, syncData]);
 
   const findLastOrder = (customerId: string, customerName: string) => { const customerOrders = orders.filter(o => o.customerName === customerName || customers.find(c => c.id === customerId)?.name === o.customerName); const sorted = customerOrders.sort((a, b) => new Date(b.deliveryDate).getTime() - new Date(a.deliveryDate).getTime()); const last = sorted.find(o => o.deliveryDate !== selectedDate); if (last && last.items.length > 0) { setLastOrderCandidate({ date: last.deliveryDate, items: last.items.map(i => ({...i})) }); } else { setLastOrderCandidate(null); } };
   const applyLastOrder = () => { if (!lastOrderCandidate) return; setOrderForm(prev => ({ ...prev, items: lastOrderCandidate.items.map(i => ({...i})) })); setLastOrderCandidate(null); addToast('已帶入上次訂單內容', 'success'); };
@@ -808,7 +907,21 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col max-w-md mx-auto bg-morandi-oatmeal relative shadow-2xl overflow-hidden text-morandi-charcoal font-sans">
       <header className="p-6 bg-white border-b border-gray-100 flex justify-between items-center sticky top-0 z-40">
         <div><h1 className="text-2xl font-extrabold text-morandi-charcoal tracking-tight">麵廠職人</h1><p className="text-[10px] text-morandi-pebble font-bold uppercase tracking-widest mt-0.5">專業訂單管理系統</p></div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+           {/* Step 6: Visual Indicator for Background Sync */}
+           <AnimatePresence>
+             {isBackgroundSyncing && !isInitialLoading && (
+               <motion.div 
+                 initial={{ opacity: 0, scale: 0.5 }} 
+                 animate={{ opacity: 1, scale: 1 }} 
+                 exit={{ opacity: 0, scale: 0.5 }}
+                 className="w-10 h-10 flex items-center justify-center"
+               >
+                 <RefreshCw className="w-4 h-4 text-morandi-blue animate-spin" />
+               </motion.div>
+             )}
+           </AnimatePresence>
+           
            <motion.button whileTap={buttonTap} onClick={handleLogout} className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center border border-slate-100 text-morandi-pebble hover:text-rose-400 hover:bg-rose-50 transition-colors"><LogOut className="w-5 h-5" /></motion.button>
           <motion.button whileTap={buttonTap} onClick={() => setIsSettingsOpen(true)} className="w-10 h-10 rounded-2xl bg-gray-50 flex items-center justify-center border border-slate-100 text-morandi-pebble hover:text-slate-600 transition-colors active:scale-95"><Settings className="w-5 h-5" /></motion.button>
         </div>
