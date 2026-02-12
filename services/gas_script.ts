@@ -1,12 +1,29 @@
+
 // @ts-nocheck
 
 const SS = SpreadsheetApp.getActiveSpreadsheet();
-const SHEETS = {
-  ORDERS: SS.getSheetByName("Orders"),
-  CUSTOMERS: SS.getSheetByName("Customers"),
-  PRODUCTS: SS.getSheetByName("Products"),
-  CONFIG: SS.getSheetByName("Config")
-};
+
+// Helper to ensure Config sheet exists and return it
+function getConfigSheet() {
+  let sheet = SS.getSheetByName("Config");
+  if (!sheet) {
+    sheet = SS.insertSheet("Config");
+    sheet.getRange("A1").setValue("SystemPassword");
+    // 如果是新建的，預設密碼 8888 (字串格式)
+    sheet.getRange("B1").setNumberFormat("@").setValue("8888"); 
+  }
+  return sheet;
+}
+
+// Helper to get fresh references (avoiding top-level const caching issues)
+function getSheets() {
+  return {
+    ORDERS: SS.getSheetByName("Orders") || SS.insertSheet("Orders"),
+    CUSTOMERS: SS.getSheetByName("Customers") || SS.insertSheet("Customers"),
+    PRODUCTS: SS.getSheetByName("Products") || SS.insertSheet("Products"),
+    CONFIG: getConfigSheet() // Use the helper
+  };
+}
 
 function doGet(e) {
   const startDateStr = e.parameter.startDate;
@@ -73,26 +90,48 @@ function doPost(e) {
 // --- Logic Functions ---
 
 function login(data) {
-  const sheet = SHEETS.CONFIG;
-  if (!sheet) return data.password === "8888"; 
-  const password = sheet.getRange("B1").getValue();
-  return String(data.password) === String(password);
+  const sheet = getConfigSheet();
+  
+  // Use getDisplayValue() to force string representation, safer than getValue()
+  let dbPassword = sheet.getRange("B1").getDisplayValue().trim();
+  
+  // Empty cell default
+  if (!dbPassword) {
+    dbPassword = "8888";
+  }
+  
+  const inputPassword = String(data.password).trim();
+  return inputPassword === dbPassword;
 }
 
 function changePassword(data) {
-  const sheet = SHEETS.CONFIG;
-  if (!sheet) throw new Error("Config sheet missing");
-  const currentPwd = sheet.getRange("B1").getValue();
+  const sheet = getConfigSheet();
   
-  if (String(data.oldPassword) !== String(currentPwd)) {
-    return false;
+  // Get current DB password
+  let dbOld = sheet.getRange("B1").getDisplayValue().trim();
+  
+  // If empty, treat as 8888
+  if (!dbOld) {
+    dbOld = "8888";
   }
   
-  sheet.getRange("B1").setValue(data.newPassword);
+  const inputOld = String(data.oldPassword).trim();
+  
+  // Verify old password
+  if (inputOld !== dbOld) {
+    return false; // Mismatch
+  }
+  
+  // Write new password as explicit text
+  const newPwd = String(data.newPassword).trim();
+  sheet.getRange("B1").setNumberFormat("@").setValue(newPwd);
+  
   return true;
 }
 
 function getData(startDateStr) {
+  const sheets = getSheets();
+  
   // Helpers to get data as array of objects
   const getSheetData = (sheet) => {
     if (!sheet) return [];
@@ -112,12 +151,11 @@ function getData(startDateStr) {
     return data;
   };
 
-  const customers = getSheetData(SHEETS.CUSTOMERS).map(c => ({
+  const customers = getSheetData(sheets.CUSTOMERS).map(c => ({
     id: c.ID || c.id,
     name: c.Name || c.name || c.客戶名稱,
     phone: c.Phone || c.phone || c.電話,
     deliveryTime: c.DeliveryTime || c.deliveryTime || c.配送時間,
-    // Add exact Chinese headers from user prompt to ensure reading works
     defaultItems: c.DefaultItems || c.defaultItems || c.預設品項JSON || c.預設品項, 
     priceList: c.PriceList || c.priceList || c.價目表JSON || c.價目表,
     offDays: c.OffDays || c.offDays || c.公休日週期JSON || c.公休日週期,
@@ -126,7 +164,7 @@ function getData(startDateStr) {
     paymentTerm: c.PaymentTerm || c.paymentTerm || c.付款週期
   }));
 
-  const products = getSheetData(SHEETS.PRODUCTS).map(p => ({
+  const products = getSheetData(sheets.PRODUCTS).map(p => ({
     id: p.ID || p.id,
     name: p.Name || p.name || p.品項,
     unit: p.Unit || p.unit || p.單位,
@@ -134,7 +172,7 @@ function getData(startDateStr) {
     category: p.Category || p.category || p.分類
   }));
 
-  const ordersRaw = getSheetData(SHEETS.ORDERS);
+  const ordersRaw = getSheetData(sheets.ORDERS);
   let orders = ordersRaw.map(o => ({
     id: o.ID || o.id || o["Order ID"] || o.訂單ID,
     createdAt: o.CreatedAt || o.createdAt || o.建立時間,
@@ -158,17 +196,14 @@ function getData(startDateStr) {
 }
 
 function createOrder(orderData) {
-  const sheet = SHEETS.ORDERS;
+  const sheet = getSheets().ORDERS;
   
-  // Ensure we have enough columns (11)
   if (sheet.getMaxColumns() < 11) {
     sheet.insertColumnsAfter(sheet.getMaxColumns(), 11 - sheet.getMaxColumns());
   }
 
   const timestamp = Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
   
-  // Schema based on User's Orders Sheet:
-  // 1.建立時間, 2.訂單ID, 3.客戶名, 4.配送日期, 5.配送時間, 6.品項, 7.數量, 8.備註, 9.狀態, 10.配送方式, 11.單位
   const rows = orderData.items.map(item => [
     timestamp,
     orderData.id,
@@ -190,31 +225,18 @@ function createOrder(orderData) {
 }
 
 function updateOrderContent(orderData) {
-  const sheet = SHEETS.ORDERS;
+  const sheet = getSheets().ORDERS;
   const values = sheet.getDataRange().getValues();
-  
-  Logger.log("UpdateOrderContent called for ID: " + orderData.id);
   
   const targetId = String(orderData.id).trim();
   let originalCreatedAt = "";
-  let deletedCount = 0;
   
-  // Remove old rows backwards
   for (let i = values.length - 1; i >= 1; i--) {
     const sheetId = String(values[i][1]).trim();
-    
     if (sheetId === targetId) {
       if (!originalCreatedAt) originalCreatedAt = values[i][0];
       sheet.deleteRow(i + 1);
-      deletedCount++;
     }
-  }
-  
-  Logger.log("Deleted " + deletedCount + " old rows.");
-
-  // Check column width again
-  if (sheet.getMaxColumns() < 11) {
-     sheet.insertColumnsAfter(sheet.getMaxColumns(), 11 - sheet.getMaxColumns());
   }
 
   const timestamp = originalCreatedAt || Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
@@ -235,23 +257,19 @@ function updateOrderContent(orderData) {
 
   if (rows.length > 0) {
     sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 11).setValues(rows);
-    Logger.log("Appended " + rows.length + " new rows.");
-  } else {
-    Logger.log("Warning: No items to append for order " + targetId);
   }
-  
   return true;
 }
 
 function updateOrderStatus(data) {
-  const sheet = SHEETS.ORDERS;
+  const sheet = getSheets().ORDERS;
   const values = sheet.getDataRange().getValues();
   let updated = false;
   const targetId = String(data.id).trim();
   
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][1]).trim() === targetId) {
-      sheet.getRange(i + 1, 9).setValue(data.status); // Column 9 is Status
+      sheet.getRange(i + 1, 9).setValue(data.status);
       updated = true;
     }
   }
@@ -261,7 +279,7 @@ function updateOrderStatus(data) {
 }
 
 function batchUpdatePaymentStatus(data) {
-  const sheet = SHEETS.ORDERS;
+  const sheet = getSheets().ORDERS;
   const values = sheet.getDataRange().getValues();
   const orderIds = new Set(data.orderIds.map(id => String(id).trim()));
   
@@ -275,7 +293,7 @@ function batchUpdatePaymentStatus(data) {
 }
 
 function deleteOrder(data) {
-  const sheet = SHEETS.ORDERS;
+  const sheet = getSheets().ORDERS;
   const values = sheet.getDataRange().getValues();
   const targetId = String(data.id).trim();
   
@@ -288,16 +306,14 @@ function deleteOrder(data) {
 }
 
 function reorderProducts(orderedIds) {
-  const sheet = SHEETS.PRODUCTS;
+  const sheet = getSheets().PRODUCTS;
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return true;
 
   const headers = values[0];
   const rows = values.slice(1);
-  
   const map = new Map();
   rows.forEach(r => map.set(String(r[0]), r));
-  
   const newRows = [];
   orderedIds.forEach(id => {
     if (map.has(String(id))) {
@@ -305,22 +321,18 @@ function reorderProducts(orderedIds) {
       map.delete(String(id));
     }
   });
-  
   map.forEach(r => newRows.push(r));
-  
   sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
   sheet.getRange(2, 1, newRows.length, newRows[0].length).setValues(newRows);
-  
   return true;
 }
 
 function updateCustomer(data) {
-  const sheet = SHEETS.CUSTOMERS;
+  const sheet = getSheets().CUSTOMERS;
   const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
   const targetId = String(data.id).trim();
   
-  // Find existing by ID (Column 0 / A Column)
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === targetId) {
       rowIndex = i + 1;
@@ -328,19 +340,17 @@ function updateCustomer(data) {
     }
   }
   
-  // FIXED Schema based on User's Customers Sheet:
-  // 1.ID, 2.客戶名稱, 3.電話, 4.配送時間, 5.預設品項, 6.公休日週期, 7.特定公休日, 8.價目表, 9.配送方式, 10.付款週期
   const rowData = [
-    data.id,                              // 1. ID
-    data.name,                            // 2. 客戶名稱
-    data.phone,                           // 3. 電話
-    data.deliveryTime,                    // 4. 配送時間
-    JSON.stringify(data.defaultItems),    // 5. 預設品項 (JSON)
-    JSON.stringify(data.offDays),         // 6. 公休日週期 (JSON)
-    JSON.stringify(data.holidayDates),    // 7. 特定公休日 (JSON)
-    JSON.stringify(data.priceList),       // 8. 價目表 (JSON)
-    data.deliveryMethod,                  // 9. 配送方式
-    data.paymentTerm                      // 10. 付款週期
+    data.id,
+    data.name,
+    data.phone,
+    data.deliveryTime,
+    JSON.stringify(data.defaultItems),
+    JSON.stringify(data.offDays),
+    JSON.stringify(data.holidayDates),
+    JSON.stringify(data.priceList),
+    data.deliveryMethod,
+    data.paymentTerm
   ];
   
   if (rowIndex > 0) {
@@ -352,7 +362,7 @@ function updateCustomer(data) {
 }
 
 function deleteCustomer(data) {
-  const sheet = SHEETS.CUSTOMERS;
+  const sheet = getSheets().CUSTOMERS;
   const values = sheet.getDataRange().getValues();
   const targetId = String(data.id).trim();
   
@@ -366,7 +376,7 @@ function deleteCustomer(data) {
 }
 
 function updateProduct(data) {
-  const sheet = SHEETS.PRODUCTS;
+  const sheet = getSheets().PRODUCTS;
   const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
   const targetId = String(data.id).trim();
@@ -378,7 +388,6 @@ function updateProduct(data) {
     }
   }
   
-  // Schema: ID, Name, Unit, Price, Category
   const rowData = [
     data.id,
     data.name,
@@ -396,7 +405,7 @@ function updateProduct(data) {
 }
 
 function deleteProduct(data) {
-  const sheet = SHEETS.PRODUCTS;
+  const sheet = getSheets().PRODUCTS;
   const values = sheet.getDataRange().getValues();
   const targetId = String(data.id).trim();
   

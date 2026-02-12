@@ -73,5 +73,16 @@ export const PRODUCT_CATEGORIES = [
 ];
 
 // --- 配置：GAS 部署網址 ---
-// 建議部署到網路時，將此檔案加入 .gitignore 或使用環境變數管理
-export const GAS_URL = 'https://script.google.com/macros/s/AKfycbxh3xCnUL4eGoaObWxoRuv9l31JWtR8Obs2aofmh_tPh2p4OmW0MaoK-bOBNCKGjwsi/exec';
+// 讀取環境變數
+// 注意：如果是使用 Vite，是用 import.meta.env
+// 如果是 Create React App (Webpack)，則是用 process.env.REACT_APP_API_URL
+
+const ENV_URL = (import.meta as any).env?.VITE_API_URL;
+
+// 增加一層防呆機制 (UX/DX 優化)
+// 如果開發者忘記設定 .env，在 console 跳出警告，避免程式直接掛掉不知原因
+if (!ENV_URL) {
+  console.error("警告: 未設定 VITE_API_URL 環境變數，API 連線將會失敗。");
+}
+
+export const GAS_URL = ENV_URL || '';

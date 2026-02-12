@@ -654,14 +654,16 @@ const App: React.FC = () => {
   
   // UPDATED: handleSaveOrder to support Edit
   const handleSaveOrder = async () => { 
+    // 防止連點，但在樂觀更新中，我們會很快把 isSaving 解除，或者根本不用設為 true 鎖住 UI
     if (isSaving) return; 
+    
     const finalName = orderForm.customerType === 'existing' ? orderForm.customerName : orderForm.customerName; 
     if (!finalName) return; 
+    
     const validItems = orderForm.items.filter(i => i.productId !== '' && i.quantity > 0); 
     if (validItems.length === 0) return; 
     
-    setIsSaving(true); 
-    
+    // 1. 準備資料
     const processedItems = orderSummary.details.filter(d => d.rawQty > 0).map(detail => { 
       const originalItem = orderForm.items.find(i => { 
         const p = products.find(prod => prod.id === i.productId); 
@@ -670,18 +672,16 @@ const App: React.FC = () => {
       return { productId: originalItem.productId, quantity: Math.max(0, detail.displayQty), unit: detail.displayUnit }; 
     }); 
 
-    // Logic separation for Edit vs Create
     let newOrder: Order;
     let actionName = 'createOrder';
 
     if (editingOrderId) {
-      // Editing existing order
       const existingOrder = orders.find(o => o.id === editingOrderId);
       newOrder = {
         id: editingOrderId,
-        createdAt: existingOrder?.createdAt || new Date().toISOString(), // Preserve original creation time if possible
+        createdAt: existingOrder?.createdAt || new Date().toISOString(),
         customerName: finalName,
-        deliveryDate: existingOrder?.deliveryDate || selectedDate, // Should usually stay on same date unless we add date picker to edit
+        deliveryDate: existingOrder?.deliveryDate || selectedDate,
         deliveryTime: orderForm.deliveryTime,
         deliveryMethod: orderForm.deliveryMethod,
         items: processedItems,
@@ -690,7 +690,6 @@ const App: React.FC = () => {
       };
       actionName = 'updateOrderContent';
     } else {
-      // Creating new order
       newOrder = { 
         id: 'ORD-' + Date.now(), 
         createdAt: new Date().toISOString(), 
@@ -704,6 +703,24 @@ const App: React.FC = () => {
       };
     }
 
+    // 2. 快照備份 (Snapshot)
+    const previousOrders = [...orders];
+
+    // 3. 樂觀更新 (Optimistic Update)
+    if (editingOrderId) {
+        setOrders(prev => prev.map(o => o.id === editingOrderId ? newOrder : o));
+        addToast('訂單已更新', 'success');
+    } else {
+        setOrders(prev => [newOrder, ...prev]);
+        addToast('訂單建立成功', 'success');
+    }
+    
+    // 4. 立即關閉 UI
+    setIsAddingOrder(false); 
+    setEditingOrderId(null);
+    setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', deliveryMethod: '', items: [{ productId: '', quantity: 10, unit: '斤' }], note: '' }); 
+
+    // 5. 背景 API 同步
     try { 
       if (apiEndpoint) { 
         const uploadItems = processedItems.map(item => { 
@@ -717,22 +734,11 @@ const App: React.FC = () => {
         }); 
       } 
     } catch (e) { 
-      console.error(e); 
-      addToast(editingOrderId ? "訂單更新失敗，請檢查網路" : "訂單建立失敗，請檢查網路", 'error'); 
+      console.error("Sync Failed:", e); 
+      // 6. 錯誤回滾
+      setOrders(previousOrders); 
+      addToast(editingOrderId ? "更新失敗，已還原資料" : "建立失敗，已還原資料", 'error'); 
     } 
-    
-    if (editingOrderId) {
-        setOrders(orders.map(o => o.id === editingOrderId ? newOrder : o));
-        addToast('訂單已更新！', 'success');
-    } else {
-        setOrders([newOrder, ...orders]);
-        addToast('訂單建立成功！', 'success');
-    }
-    
-    setIsSaving(false); 
-    setIsAddingOrder(false); 
-    setEditingOrderId(null); // Reset
-    setOrderForm({ customerType: 'existing', customerId: '', customerName: '', deliveryTime: '08:00', deliveryMethod: '', items: [{ productId: '', quantity: 10, unit: '斤' }], note: '' }); 
   };
 
   const handleQuickAddSubmit = async () => { if (!quickAddData || isSaving) return; const validItems = quickAddData.items.filter(i => i.productId && i.quantity > 0); if (validItems.length === 0) return; setIsSaving(true); const existingOrders = groupedOrders[quickAddData.customerName] || []; const baseOrder = existingOrders[0]; const now = new Date(); const deliveryTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`; const customer = customers.find(c => c.name === quickAddData.customerName); const deliveryMethod = baseOrder?.deliveryMethod || customer?.deliveryMethod || ''; const processedItems = validItems.map(item => { let finalQuantity = Math.max(0, item.quantity); let finalUnit = item.unit; const product = products.find(p => p.id === item.productId); const targetUnit = product?.unit || '斤'; if (item.unit === '元') { const priceItem = customer?.priceList?.find(pl => pl.productId === item.productId); const unitPrice = priceItem ? priceItem.price : (product?.price || 0); if (unitPrice > 0) { finalQuantity = parseFloat((finalQuantity / unitPrice).toFixed(2)); finalUnit = targetUnit; } } else if (item.unit === '公斤' && targetUnit === '斤') { finalQuantity = parseFloat((finalQuantity * (1000 / 600)).toFixed(2)); finalUnit = '斤'; } return { productId: item.productId, quantity: Math.max(0, finalQuantity), unit: finalUnit }; }); const newOrder: Order = { id: 'Q-ORD-' + Date.now(), createdAt: new Date().toISOString(), customerName: quickAddData.customerName, deliveryDate: selectedDate, deliveryTime: deliveryTime, deliveryMethod: deliveryMethod, items: processedItems, note: '追加單', status: OrderStatus.PENDING }; try { if (apiEndpoint) { const uploadItems = processedItems.map(item => { const p = products.find(prod => prod.id === item.productId); return { productName: p?.name || item.productId, quantity: item.quantity, unit: item.unit }; }); await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'createOrder', data: { ...newOrder, items: uploadItems } }) }); } } catch (e) { console.error(e); addToast("追加失敗，請檢查網路", 'error'); } setOrders([newOrder, ...orders]); setIsSaving(false); setQuickAddData(null); addToast('追加訂單成功！', 'success'); };
