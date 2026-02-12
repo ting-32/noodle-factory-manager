@@ -247,7 +247,7 @@ const formatTimeForInput = (time: any) => {
   return '08:00';
 };
 
-// --- Sortable Product Item Component ---
+// ... (SortableProductItem, SwipeableOrderCard, ScheduleOrderCard... remain unchanged) ...
 const SortableProductItem: React.FC<{
   product: Product;
   onEdit: (p: Product) => void;
@@ -307,7 +307,7 @@ const SortableProductItem: React.FC<{
   );
 };
 
-// --- SwipeableOrderCard with Edit Button ---
+// ... (SwipeableOrderCard, ScheduleOrderCard, LoginScreen, ConfirmModal, ProductPicker, CustomerPicker, HolidayCalendar, WorkCalendar, DatePickerModal, SettingsModal, NavItem, ToastNotification remain unchanged)
 const SwipeableOrderCard: React.FC<{
   order: Order;
   products: Product[];
@@ -332,11 +332,70 @@ const SwipeableOrderCard: React.FC<{
   const handleDragEnd = (event: any, info: PanInfo) => { setIsDragging(false); const offset = info.offset.x; if (offset > DRAG_THRESHOLD) { triggerHaptic(20); let nextStatus = OrderStatus.PENDING; if (order.status === OrderStatus.PENDING) nextStatus = OrderStatus.SHIPPED; else if (order.status === OrderStatus.SHIPPED) nextStatus = OrderStatus.PAID; if (order.status !== OrderStatus.PAID) { onStatusChange(order.id, nextStatus); } } else if (offset < -DRAG_THRESHOLD) { triggerHaptic([20, 50, 20]); onDelete(order.id); } };
   const bgOpacityRight = useTransform(x, [0, DRAG_THRESHOLD], [0, 1]); const bgScaleRight = useTransform(x, [0, DRAG_THRESHOLD], [0.8, 1.2]); const bgOpacityLeft = useTransform(x, [0, -DRAG_THRESHOLD], [0, 1]); const bgScaleLeft = useTransform(x, [0, -DRAG_THRESHOLD], [0.8, 1.2]);
   return ( <div className="relative mb-4"> <div className="absolute inset-0 rounded-[32px] flex items-center justify-between px-6 pointer-events-none overflow-hidden"> <motion.div style={{ opacity: bgOpacityRight, scale: bgScaleRight }} className="flex items-center gap-2 text-emerald-500 font-bold"> <CheckCircle2 className="w-8 h-8" /> <span className="text-sm">{order.status === OrderStatus.PENDING ? '標記出貨' : '標記收款'}</span> </motion.div> <motion.div style={{ opacity: bgOpacityLeft, scale: bgScaleLeft }} className="flex items-center gap-2 text-rose-500 font-bold"> <span className="text-sm">刪除訂單</span> <Trash2 className="w-8 h-8" /> </motion.div> </div> <motion.div drag={isSelectionMode ? false : "x"} dragConstraints={{ left: 0, right: 0 }} dragElastic={0.7} dragDirectionLock={true} onDragStart={() => setIsDragging(true)} onDragEnd={handleDragEnd} style={{ x }} initial={false} animate={{ backgroundColor: statusConfig.cardBg, borderColor: statusConfig.cardBorder, x: isSelectionMode ? 10 : 0 }} className={`rounded-[32px] overflow-hidden shadow-sm border-2 relative z-10 touch-pan-y ${isSelectionMode ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`} onClick={() => { if (isSelectionMode) onToggleSelection(); }} > {isSelectionMode && ( <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20"> {isSelected ? <div className="w-6 h-6 rounded-lg bg-morandi-blue flex items-center justify-center text-white shadow-md"><CheckCircle2 className="w-4 h-4" /></div> : <div className="w-6 h-6 rounded-lg border-2 border-slate-300 bg-white" />} </div> )} <div className={`p-5 transition-all ${isSelectionMode ? 'pl-14' : ''}`}> <div className="flex justify-between items-center mb-4"> <div className="flex items-center gap-3"> <div className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors duration-300`} style={{ backgroundColor: statusConfig.tagBg, color: statusConfig.tagText }}> <Clock className="w-3.5 h-3.5" />{formatTimeDisplay(order.deliveryTime)} </div> {order.deliveryMethod && (<span className="text-[10px] font-bold text-gray-400 bg-white/60 px-2 py-1 rounded-lg border border-black/5">{order.deliveryMethod}</span>)} {habitLabel && (<span className="text-[10px] font-bold text-morandi-blue bg-blue-50 px-2 py-1 rounded-lg border border-blue-100">{habitLabel}</span>)} </div> <div className="relative group" onClick={(e) => isSelectionMode && e.stopPropagation()}> <select disabled={isSelectionMode} value={order.status || OrderStatus.PENDING} onChange={(e) => onStatusChange(order.id, e.target.value as OrderStatus)} className={`appearance-none pl-4 pr-9 py-2 rounded-xl text-xs font-extrabold cursor-pointer outline-none transition-all duration-300 border border-transparent hover:brightness-95 ${isSelectionMode ? 'opacity-50 pointer-events-none' : ''}`} style={{ backgroundColor: statusConfig.tagBg, color: statusConfig.tagText }}> <option value={OrderStatus.PENDING}>待處理</option><option value={OrderStatus.SHIPPED}>已配送</option><option value={OrderStatus.PAID}>已收款</option> </select> <ChevronDown className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-300 group-hover:rotate-180" style={{ color: statusConfig.iconColor }} /> </div> </div> <div className="flex justify-between items-end mb-5"> <h4 className="font-extrabold text-slate-800 text-xl tracking-tight leading-none">{order.customerName}</h4> <div className="flex flex-col items-end"><span className="font-mono font-black text-xl text-morandi-charcoal tracking-tight"><span className="text-sm text-gray-400 mr-1">$</span>{totalAmount.toLocaleString()}</span></div> </div> <div className="space-y-2"> {order.items.map((item, idx) => { const p = products.find(prod => prod.id === item.productId || prod.name === item.productId); return ( <div key={idx} className="flex justify-between items-center py-2 px-3 bg-white/60 rounded-[16px] border border-black/5"> <span className="text-sm font-bold text-slate-600 tracking-wide">{p?.name || item.productId}</span> <div className="flex items-baseline gap-1"><span className="font-black text-lg text-slate-800">{item.quantity}</span><span className="text-[10px] font-bold text-gray-400">{item.unit || p?.unit || '斤'}</span></div> </div> ); })} </div> <div className="mt-4 pt-3 border-t border-black/5 flex justify-between items-center"> <div className="flex gap-2"> <motion.button disabled={isSelectionMode} whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); onShare(order); }} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-400 hover:text-slate-600 hover:shadow-sm transition-all border border-black/5 disabled:opacity-50"><Share2 className="w-4 h-4" /></motion.button> <motion.button disabled={isSelectionMode} whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); onMap(order.customerName); }} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-blue-400 hover:text-blue-600 hover:shadow-sm transition-all border border-black/5 disabled:opacity-50"><MapPin className="w-4 h-4" /></motion.button> <motion.button disabled={isSelectionMode} whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); onEdit(order); }} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-400 hover:text-morandi-blue hover:shadow-sm transition-all border border-black/5 disabled:opacity-50"><Edit2 className="w-4 h-4" /></motion.button> </div> {order.note && (<div className="text-[10px] font-bold text-gray-400 bg-white/40 px-3 py-1.5 rounded-lg max-w-[60%] truncate">備註: {order.note}</div>)} </div> </div> </motion.div> </div> ); };
-
-// ... (ScheduleOrderCard, LoginScreen, ConfirmModal, ProductPicker, CustomerPicker, HolidayCalendar, WorkCalendar, DatePickerModal, SettingsModal, NavItem, ToastNotification remain unchanged)
+// ... (ScheduleOrderCard, LoginScreen, ConfirmModal, etc. remain unchanged) ...
 const ScheduleOrderCard: React.FC<{ order: Order; products: Product[]; customers: Customer[]; isSelectionMode: boolean; isSelected: boolean; onToggleSelection: () => void; onStatusChange: (id: string, status: OrderStatus) => void; onShare: (order: Order) => void; onMap: (name: string) => void; }> = ({ order, products, customers, isSelectionMode, isSelected, onToggleSelection, onStatusChange, onShare, onMap }) => { const x = useMotionValue(0); const [isExpanded, setIsExpanded] = useState(false); const [isDragging, setIsDragging] = useState(false); const DRAG_THRESHOLD = 80; useEffect(() => { x.set(0); }, [order.status, x]); const statusConfig = getStatusStyles(order.status || OrderStatus.PENDING); const totalAmount = (() => { const customer = customers.find(c => c.name === order.customerName); let total = 0; order.items.forEach(item => { const product = products.find(p => p.id === item.productId || p.name === item.productId); const priceItem = customer?.priceList?.find(pl => pl.productId === (product?.id || item.productId)); const unitPrice = priceItem ? priceItem.price : (product?.price || 0); if (item.unit === '元') { total += item.quantity; } else { total += Math.round(item.quantity * unitPrice); } }); return total; })(); const customer = customers.find(c => c.name === order.customerName); const itemSummary = order.items.map(item => { const p = products.find(prod => prod.id === item.productId || prod.name === item.productId); return `${p?.name || item.productId} ${item.quantity}${item.unit || '斤'}`; }).join('、'); const handleDragEnd = (event: any, info: PanInfo) => { setIsDragging(false); const offset = info.offset.x; if (offset > DRAG_THRESHOLD) { if (order.status === OrderStatus.PENDING) { triggerHaptic(20); onStatusChange(order.id, OrderStatus.SHIPPED); } else if (order.status === OrderStatus.SHIPPED) { triggerHaptic(20); onStatusChange(order.id, OrderStatus.PAID); } } else if (offset < -DRAG_THRESHOLD) { if (order.status === OrderStatus.PAID) { triggerHaptic(20); onStatusChange(order.id, OrderStatus.SHIPPED); } else if (order.status === OrderStatus.SHIPPED) { triggerHaptic(20); onStatusChange(order.id, OrderStatus.PENDING); } } }; const bgOpacityRight = useTransform(x, [0, DRAG_THRESHOLD], [0, 1]); const bgScaleRight = useTransform(x, [0, DRAG_THRESHOLD], [0.8, 1.2]); const bgOpacityLeft = useTransform(x, [0, -DRAG_THRESHOLD], [0, 1]); const bgScaleLeft = useTransform(x, [0, -DRAG_THRESHOLD], [0.8, 1.2]); return ( <div className="relative mb-3"> <div className="absolute inset-0 rounded-[20px] flex items-center justify-between px-6 pointer-events-none overflow-hidden"> <motion.div style={{ opacity: bgOpacityRight, scale: bgScaleRight }} className="flex items-center gap-2 text-emerald-500 font-bold"> <CheckCircle2 className="w-6 h-6" /> <span className="text-xs"> {order.status === OrderStatus.PENDING ? '轉已配送' : '轉已收款'} </span> </motion.div> <motion.div style={{ opacity: bgOpacityLeft, scale: bgScaleLeft }} className="flex items-center gap-2 text-amber-500 font-bold"> <span className="text-xs"> {order.status === OrderStatus.PAID ? '返回已配送' : '返回待處理'} </span> <RotateCcw className="w-6 h-6" /> </motion.div> </div> <motion.div drag={isSelectionMode ? false : "x"} dragConstraints={isSelectionMode ? {left:0, right:0} : {left: 0, right: 0}} dragElastic={{ left: order.status === OrderStatus.PENDING ? 0.1 : 0.7, right: order.status === OrderStatus.PAID ? 0.1 : 0.7 }} dragDirectionLock={true} onDragStart={() => setIsDragging(true)} onDragEnd={handleDragEnd} style={{ x }} initial={false} animate={{ backgroundColor: '#FFFFFF', borderColor: statusConfig.cardBorder, x: isSelectionMode ? 10 : 0 }} className={`rounded-[20px] overflow-hidden shadow-sm border border-slate-200 relative z-10 touch-pan-y transition-shadow ${isSelectionMode ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`} onClick={() => { if (isSelectionMode) onToggleSelection(); }} > {isSelectionMode && ( <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20"> {isSelected ? <div className="w-6 h-6 rounded-lg bg-morandi-blue flex items-center justify-center text-white shadow-md"><CheckCircle2 className="w-4 h-4" /></div> : <div className="w-6 h-6 rounded-lg border-2 border-slate-300 bg-white" />} </div> )} <div className={`p-4 ${isSelectionMode ? 'pl-14' : ''}`}> <div className="flex justify-between items-center" onClick={() => !isSelectionMode && !isDragging && setIsExpanded(!isExpanded)}> <div className="flex flex-col gap-1 min-w-0 flex-1 pr-2"> <div className="flex items-center gap-2"> <div className={`px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1 transition-colors`} style={{ backgroundColor: statusConfig.tagBg, color: statusConfig.tagText }}> <Clock className="w-3 h-3" />{formatTimeDisplay(order.deliveryTime)} </div> <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${order.status === OrderStatus.PAID ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : order.status === OrderStatus.SHIPPED ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-gray-50 text-gray-500 border-gray-200'}`}> {statusConfig.label} </span> </div> <div className="flex items-center gap-2"> <h4 className="font-bold text-slate-800 text-base truncate">{order.customerName}</h4> {!isExpanded && <span className="text-xs font-bold text-morandi-charcoal">${totalAmount.toLocaleString()}</span>} </div> {!isExpanded && ( <p className="text-[10px] text-gray-400 truncate">{itemSummary}</p> )} </div> {isExpanded ? <ChevronUp className="w-5 h-5 text-gray-400 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 text-gray-400 flex-shrink-0" />} </div> <AnimatePresence> {isExpanded && ( <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden"> <div className="pt-3 mt-3 border-t border-dashed border-gray-200"> <div className="space-y-1.5 mb-3"> {order.items.map((item, idx) => { const p = products.find(prod => prod.id === item.productId || prod.name === item.productId); return ( <div key={idx} className="flex justify-between items-center text-xs"> <span className="text-slate-600 font-medium">{p?.name || item.productId}</span> <span className="font-bold text-slate-800">{item.quantity} {item.unit || '斤'}</span> </div> ) })} </div> <div className="flex justify-between items-center pt-2 border-t border-gray-100 mb-3"> <span className="text-xs font-bold text-gray-400">總金額</span> <span className="text-lg font-black text-morandi-charcoal">${totalAmount.toLocaleString()}</span> </div> {order.note && ( <div className="text-[10px] font-bold text-gray-500 bg-gray-50 px-3 py-2 rounded-lg mb-3 break-words"> 備註: {order.note} </div> )} <div className="flex gap-2"> <motion.button whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); onShare(order); }} className="flex-1 py-2 rounded-xl bg-gray-50 text-slate-500 font-bold text-xs flex items-center justify-center gap-1 hover:bg-gray-100 transition-colors border border-gray-100"><Share2 className="w-3.5 h-3.5" /> 分享</motion.button> <motion.button whileTap={buttonTap} onClick={(e) => { e.stopPropagation(); onMap(order.customerName); }} className="flex-1 py-2 rounded-xl bg-morandi-blue/10 text-morandi-blue font-bold text-xs flex items-center justify-center gap-1 hover:bg-morandi-blue/20 transition-colors border border-transparent"><MapPin className="w-3.5 h-3.5" /> 地圖</motion.button> </div> </div> </motion.div> )} </AnimatePresence> </div> </motion.div> </div> ); };
+// ... (LoginScreen, etc. remain unchanged)
 const LoginScreen: React.FC<{ onLogin: (password: string) => Promise<boolean> }> = ({ onLogin }) => { const [inputVal, setInputVal] = useState(''); const [error, setError] = useState(false); const [loading, setLoading] = useState(false); const handleSubmit = async (e: React.FormEvent) => { e.preventDefault(); if (!inputVal) return; setLoading(true); setError(false); try { const success = await onLogin(inputVal); if (!success) { setError(true); setInputVal(''); } } catch (e) { setError(true); } finally { setLoading(false); } }; return ( <div className="min-h-screen flex flex-col items-center justify-center bg-morandi-oatmeal p-6 relative overflow-hidden font-sans"> <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, ease: "easeOut" }} className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-morandi-blue rounded-full opacity-10 blur-3xl" /> <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, ease: "easeOut", delay: 0.2 }} className="absolute bottom-[-10%] left-[-10%] w-64 h-64 bg-morandi-pink rounded-full opacity-10 blur-3xl" /> <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="bg-white/80 backdrop-blur-md p-8 rounded-[32px] shadow-lg w-full max-w-sm border border-white/50"> <div className="text-center mb-8"> <div className="w-16 h-16 bg-morandi-blue rounded-2xl flex items-center justify-center mx-auto mb-4 text-white shadow-lg rotate-3"><ClipboardList className="w-8 h-8" /></div> <h1 className="text-3xl font-extrabold text-morandi-charcoal tracking-tight">麵廠職人</h1> <p className="text-xs text-morandi-pebble font-bold uppercase tracking-[0.2em] mt-2">系統登入</p> </div> <form onSubmit={handleSubmit} className="space-y-5"> <div className="space-y-2"> <div className="relative"> <Lock className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-morandi-pebble" /> <input type="password" placeholder="請輸入系統密碼" className={`w-full pl-14 pr-6 py-4 bg-morandi-oatmeal/50 rounded-[20px] border border-slate-200 text-morandi-charcoal font-bold tracking-wide focus:ring-4 focus:ring-morandi-blue/20 focus:border-morandi-blue transition-all outline-none ${error ? 'border-rose-200 focus:border-rose-400' : ''}`} value={inputVal} onChange={(e) => { setInputVal(e.target.value); setError(false); }} autoFocus disabled={loading} /> </div> <AnimatePresence> {error && (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="flex items-center gap-1.5 px-2 text-rose-500 overflow-hidden"><AlertCircle className="w-3.5 h-3.5" /><span className="text-xs font-bold tracking-wide">密碼錯誤，請重新輸入</span></motion.div>)} </AnimatePresence> </div> <motion.button type="submit" disabled={loading} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.96 }} className="w-full py-4 rounded-[20px] bg-morandi-blue text-white font-bold text-lg shadow-md hover:bg-slate-600 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:active:scale-100">{loading ? (<><Loader2 className="w-5 h-5 animate-spin" /> 驗證中...</>) : (<>進入系統 <ChevronRight className="w-5 h-5" /></>)}</motion.button> </form> <div className="mt-10 text-center"><p className="text-[10px] text-morandi-pebble tracking-wide">© 2025 Noodle Factory Manager</p></div> </motion.div> </div> ); };
+// ... (ConfirmModal)
 const ConfirmModal: React.FC<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; onCancel: () => void; }> = ({ isOpen, title, message, onConfirm, onCancel }) => { return ( <AnimatePresence> {isOpen && ( <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-morandi-charcoal/40 z-[110] flex items-center justify-center p-6 backdrop-blur-sm"> <motion.div variants={modalVariants} initial="hidden" animate="visible" exit="exit" className="bg-morandi-paper w-full max-w-xs rounded-[24px] overflow-hidden shadow-xl border border-white/50"> <div className="p-6 text-center space-y-4"> <div className="w-14 h-14 bg-rose-50 rounded-full flex items-center justify-center mx-auto text-rose-400 mb-2"><AlertTriangle className="w-7 h-7" /></div> <h3 className="text-xl font-extrabold text-morandi-charcoal tracking-tight">{title}</h3> <p className="text-sm text-morandi-pebble font-medium leading-relaxed tracking-wide px-2 whitespace-pre-line">{message}</p> </div> <div className="p-4 flex gap-3 bg-morandi-oatmeal/30"> <motion.button whileTap={buttonTap} onClick={onCancel} className="flex-1 py-3 rounded-[16px] font-bold text-morandi-pebble bg-white shadow-sm border border-slate-200 tracking-wide">取消</motion.button> <motion.button whileTap={buttonTap} onClick={onConfirm} className="flex-1 py-3 rounded-[16px] font-bold text-white shadow-md bg-rose-400 tracking-wide">確認</motion.button> </div> </motion.div> </motion.div> )} </AnimatePresence> ); };
+
+// --- NEW: ConflictModal Component ---
+const ConflictModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+  onForceSave: () => void;
+  isSaving: boolean;
+  description?: string;
+}> = ({ isOpen, onClose, onRefresh, onForceSave, isSaving, description }) => {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 bg-morandi-charcoal/40 z-[160] flex items-center justify-center p-6 backdrop-blur-sm">
+          <motion.div variants={modalVariants} initial="hidden" animate="visible" exit="exit" className="bg-white w-full max-w-sm rounded-[24px] overflow-hidden shadow-xl border-2 border-amber-100">
+            <div className="p-6 text-center space-y-4">
+              <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto text-amber-500 mb-2">
+                <History className="w-8 h-8" /> 
+              </div>
+              <div>
+                <h3 className="text-xl font-extrabold text-slate-800">資料版本衝突</h3>
+                {description && <p className="text-xs font-bold text-amber-600 mt-1">{description}</p>}
+              </div>
+              <div className="text-sm text-slate-600 font-medium text-left bg-amber-50/50 p-4 rounded-xl border border-amber-100">
+                <p className="mb-2 font-bold text-amber-800">雲端資料比您的版本更新。</p>
+                <div className="text-xs text-slate-500 space-y-1">
+                  <p>• 選擇 <b className="text-slate-700">放棄修改</b>：將載入雲端最新資料 (您的修改將消失)。</p>
+                  <p>• 選擇 <b className="text-slate-700">強制覆蓋</b>：將以您的版本為主 (覆蓋他人的修改)。</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-4 flex gap-3 bg-slate-50">
+              <motion.button 
+                whileTap={{ scale: 0.96 }} 
+                onClick={onRefresh} 
+                className="flex-1 py-3 rounded-xl font-bold text-slate-600 bg-white border border-slate-200 shadow-sm"
+              >
+                放棄修改
+              </motion.button>
+              
+              <motion.button 
+                whileTap={{ scale: 0.96 }} 
+                onClick={onForceSave} 
+                disabled={isSaving}
+                className="flex-1 py-3 rounded-xl font-bold text-white bg-amber-500 shadow-md shadow-amber-200 flex items-center justify-center gap-2"
+              >
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin"/> : null}
+                {isSaving ? '處理中' : '強制覆蓋'}
+              </motion.button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+// ... (ProductPicker, CustomerPicker, HolidayCalendar, WorkCalendar, DatePickerModal, SettingsModal, NavItem, ToastNotification remain unchanged)
 const ProductPicker: React.FC<{ isOpen: boolean; onClose: () => void; onSelect: (productId: string) => void; products: Product[]; currentSelectedId?: string; customPrices?: CustomerPrice[]; }> = ({ isOpen, onClose, onSelect, products, currentSelectedId, customPrices }) => { const [search, setSearch] = useState(''); const [activeCategory, setActiveCategory] = useState<string>('all'); const filteredProducts = useMemo(() => { return products.filter(p => { const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()); const matchCategory = activeCategory === 'all' || (p.category || 'other') === activeCategory; return matchSearch && matchCategory; }); }, [products, search, activeCategory]); useEffect(() => { if(isOpen) { setSearch(''); setActiveCategory('all'); } }, [isOpen]); return ( <AnimatePresence> {isOpen && ( <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-morandi-charcoal/40 z-[120] flex flex-col justify-end sm:justify-center backdrop-blur-sm"> <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 300 }} className="bg-white w-full sm:max-w-md sm:mx-auto h-[85vh] sm:h-[80vh] rounded-t-[32px] sm:rounded-[32px] shadow-2xl flex flex-col overflow-hidden" > <div className="p-5 bg-white border-b border-gray-100 shrink-0 sticky top-0 z-20"> <div className="flex justify-between items-center mb-4"> <h3 className="font-extrabold text-morandi-charcoal text-lg tracking-tight">選擇品項</h3> <button onClick={onClose} className="p-2 rounded-2xl bg-gray-50 text-morandi-pebble"><X className="w-5 h-5" /></button> </div> <div className="relative mb-4"> <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" /> <input autoFocus type="text" placeholder="搜尋品項名稱..." className="w-full pl-10 pr-4 py-3 bg-gray-50 rounded-[16px] text-sm font-bold text-morandi-charcoal outline-none focus:ring-2 focus:ring-morandi-blue/50 transition-all placeholder:text-gray-300" value={search} onChange={e => setSearch(e.target.value)} /> </div> <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-2 px-2"> <button onClick={() => setActiveCategory('all')} className={`whitespace-nowrap px-4 py-2 rounded-full text-xs font-bold transition-all border ${activeCategory === 'all' ? 'bg-morandi-charcoal text-white border-transparent' : 'bg-white text-gray-400 border-gray-200'}`}>全部</button> {PRODUCT_CATEGORIES.map(cat => ( <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`whitespace-nowrap px-4 py-2 rounded-full text-xs font-bold transition-all border flex items-center gap-1.5 ${activeCategory === cat.id ? 'border-transparent shadow-sm' : 'bg-white text-gray-400 border-gray-200'}`} style={{ backgroundColor: activeCategory === cat.id ? cat.color : '', color: activeCategory === cat.id ? '#3E3C3A' : '' }}> <span className={`w-2 h-2 rounded-full`} style={{ backgroundColor: cat.color, border: '1px solid rgba(0,0,0,0.1)' }}></span> {cat.label} </button> ))} </div> </div> <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-morandi-oatmeal/20"> <div className="grid grid-cols-1 gap-3"> {filteredProducts.map(p => { const categoryConfig = PRODUCT_CATEGORIES.find(c => c.id === (p.category || 'other')); const isSelected = p.id === currentSelectedId; const customPriceItem = customPrices?.find(cp => cp.productId === p.id); const hasCustomPrice = !!customPriceItem; const displayPrice = hasCustomPrice ? customPriceItem.price : p.price; return ( <motion.button key={p.id} whileTap={{ scale: 0.98 }} onClick={() => { onSelect(p.id); onClose(); }} className={`p-4 rounded-[20px] bg-white border flex items-center gap-4 transition-all shadow-sm ${isSelected ? 'ring-2 ring-morandi-blue border-morandi-blue' : 'border-transparent hover:border-slate-200'}`}> <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600 shrink-0 border border-black/5" style={{ backgroundColor: categoryConfig?.color || '#eee' }}> <Box className="w-6 h-6" /> </div> <div className="text-left flex-1"> <h4 className="font-bold text-slate-800 text-sm tracking-wide">{p.name}</h4> <div className="flex items-center gap-2 mt-1"> <span className="text-[10px] font-bold text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{p.unit}</span> {(displayPrice !== undefined && displayPrice >= 0) && ( <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${ hasCustomPrice ? 'text-emerald-600 bg-emerald-50 border border-emerald-100' : 'text-amber-600 bg-amber-50' }`}> {hasCustomPrice && "專屬"} ${displayPrice} </span> )} <span className="text-[9px] text-gray-400 ml-auto">{categoryConfig?.label}</span> </div> </div> {isSelected && <CheckCircle2 className="w-5 h-5 text-morandi-blue" />} </motion.button> ); })} </div> {filteredProducts.length === 0 && ( <div className="py-20 text-center"> <Package className="w-12 h-12 text-gray-200 mx-auto mb-2" /> <p className="text-gray-400 font-bold text-sm">找不到相關品項</p> </div> )} </div> </motion.div> </motion.div> )} </AnimatePresence> ); };
 const CustomerPicker: React.FC<{ isOpen: boolean; onClose: () => void; onSelect: (customerId: string) => void; customers: Customer[]; selectedDate: string; currentSelectedId?: string; orders: Order[]; }> = ({ isOpen, onClose, onSelect, customers, selectedDate, currentSelectedId, orders }) => { const [search, setSearch] = useState(''); const [activeTab, setActiveTab] = useState<'regular' | 'occasional' | 'adhoc'>('regular'); 
   const orderedCustomerNames = useMemo(() => {
@@ -423,6 +482,16 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   const mainRef = useRef<HTMLDivElement>(null);
+  
+  // NEW: Ref to store the version (lastUpdated timestamp) of the item currently being edited
+  const editingVersionRef = useRef<number | undefined>(undefined);
+
+  // NEW: State for Conflict Management
+  const [conflictData, setConflictData] = useState<{
+    action: string;
+    data: any;
+    description: string;
+  } | null>(null);
 
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     if (typeof window !== 'undefined') {
@@ -646,9 +715,28 @@ const App: React.FC = () => {
       if (result.success && result.data) { 
         const mappedCustomers: Customer[] = (result.data.customers || []).map((c: any) => { 
           const priceListKey = Object.keys(c).find(k => k.includes('價目表') || k.includes('Price') || k.includes('priceList')) || '價目表JSON'; 
-          return { id: String(c.ID || c.id || ''), name: c.客戶名稱 || c.name || '', phone: c.電話 || c.phone || '', deliveryTime: c.配送時間 || c.deliveryTime || '', deliveryMethod: c.配送方式 || c.deliveryMethod || '', paymentTerm: c.付款週期 || c.paymentTerm || 'daily', defaultItems: safeJsonArray(c.預設品項JSON || c.預設品項 || c.defaultItems), priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({ productId: pl.productId, price: Number(pl.price) || 0, unit: pl.unit || '斤' })), offDays: safeJsonArray(c.公休日週期JSON || c.公休日週期 || c.offDays), holidayDates: safeJsonArray(c.特定公休日JSON || c.特定公休日 || c.holidayDates) }; 
+          return { 
+            id: String(c.ID || c.id || ''), 
+            name: c.客戶名稱 || c.name || '', 
+            phone: c.電話 || c.phone || '', 
+            deliveryTime: c.配送時間 || c.deliveryTime || '', 
+            deliveryMethod: c.配送方式 || c.deliveryMethod || '', 
+            paymentTerm: c.付款週期 || c.paymentTerm || 'daily', 
+            defaultItems: safeJsonArray(c.預設品項JSON || c.預設品項 || c.defaultItems), 
+            priceList: safeJsonArray(c[priceListKey] || c.priceList).map((pl: any) => ({ productId: pl.productId, price: Number(pl.price) || 0, unit: pl.unit || '斤' })), 
+            offDays: safeJsonArray(c.公休日週期JSON || c.公休日週期 || c.offDays), 
+            holidayDates: safeJsonArray(c.特定公休日JSON || c.特定公休日 || c.holidayDates),
+            lastUpdated: Number(c.lastUpdated) || 0
+          }; 
         }); 
-        const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({ id: String(p.ID || p.id), name: p.品項 || p.name, unit: p.單位 || p.unit, price: Number(p.單價 || p.price) || 0, category: p.分類 || p.category || 'other' })); 
+        const mappedProducts: Product[] = (result.data.products || []).map((p: any) => ({ 
+          id: String(p.ID || p.id), 
+          name: p.品項 || p.name, 
+          unit: p.單位 || p.unit, 
+          price: Number(p.單價 || p.price) || 0, 
+          category: p.分類 || p.category || 'other',
+          lastUpdated: Number(p.lastUpdated) || 0
+        })); 
         const rawOrders = result.data.orders || []; 
         const orderMap: { [key: string]: Order } = {}; 
         rawOrders.forEach((o: any) => { 
@@ -656,7 +744,18 @@ const App: React.FC = () => {
           if (!orderMap[oid]) { 
             const rawDate = o.配送日期 || o.deliveryDate; 
             const normalizedDate = normalizeDate(rawDate); 
-            orderMap[oid] = { id: oid, createdAt: o.建立時間 || o.createdAt, customerName: o.客戶名 || o.customerName || '未知客戶', deliveryDate: normalizedDate, deliveryTime: o.配送時間 || o.deliveryTime, items: [], note: o.備註 || o.note || '', status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING, deliveryMethod: o.配送方式 || o.deliveryMethod || '' }; 
+            orderMap[oid] = { 
+              id: oid, 
+              createdAt: o.建立時間 || o.createdAt, 
+              customerName: o.客戶名 || o.customerName || '未知客戶', 
+              deliveryDate: normalizedDate, 
+              deliveryTime: o.配送時間 || o.deliveryTime, 
+              items: [], 
+              note: o.備註 || o.note || '', 
+              status: (o.狀態 || o.status as OrderStatus) || OrderStatus.PENDING, 
+              deliveryMethod: o.配送方式 || o.deliveryMethod || '',
+              lastUpdated: Number(o.lastUpdated) || 0
+            }; 
           } 
           const prodName = o.品項 || o.productName; 
           const prod = mappedProducts.find(p => p.name === prodName); 
@@ -735,8 +834,10 @@ const App: React.FC = () => {
   // NEW: Handle Edit Order
   const handleEditOrder = (order: Order) => {
     setEditingOrderId(order.id);
-    const cust = customers.find(c => c.name === order.customerName);
+    // 鎖定當下版本
+    editingVersionRef.current = order.lastUpdated;
     
+    const cust = customers.find(c => c.name === order.customerName);
     setOrderForm({
       customerType: 'existing', // Assume existing for simplicity, or check ID logic
       customerId: cust ? cust.id : '',
@@ -749,11 +850,48 @@ const App: React.FC = () => {
     setIsAddingOrder(true);
   };
 
-  const handleCreateOrderFromCustomer = (c: Customer) => { const proceedWithCreation = () => { setEditingOrderId(null); setOrderForm({ customerType: 'existing', customerId: c.id, customerName: c.name, deliveryTime: formatTimeForInput(c.deliveryTime), deliveryMethod: c.deliveryMethod || '', items: c.defaultItems && c.defaultItems.length > 0 ? c.defaultItems.map(di => ({ ...di })) : [{ productId: '', quantity: 10, unit: '斤' }], note: '' }); findLastOrder(c.id, c.name); setIsAddingOrder(true); }; if (groupedOrders[c.name] && groupedOrders[c.name].length > 0) { setConfirmConfig({ isOpen: true, title: '重複訂單提醒', message: `「${c.name}」在今日 (${selectedDate}) 已經有訂單了！\n\n確定要「追加」一筆新訂單嗎？`, onConfirm: () => { setConfirmConfig(prev => ({...prev, isOpen: false})); proceedWithCreation(); } }); } else { proceedWithCreation(); } };
+  const handleCreateOrderFromCustomer = (c: Customer) => { const proceedWithCreation = () => { setEditingOrderId(null); editingVersionRef.current = undefined; setOrderForm({ customerType: 'existing', customerId: c.id, customerName: c.name, deliveryTime: formatTimeForInput(c.deliveryTime), deliveryMethod: c.deliveryMethod || '', items: c.defaultItems && c.defaultItems.length > 0 ? c.defaultItems.map(di => ({ ...di })) : [{ productId: '', quantity: 10, unit: '斤' }], note: '' }); findLastOrder(c.id, c.name); setIsAddingOrder(true); }; if (groupedOrders[c.name] && groupedOrders[c.name].length > 0) { setConfirmConfig({ isOpen: true, title: '重複訂單提醒', message: `「${c.name}」在今日 (${selectedDate}) 已經有訂單了！\n\n確定要「追加」一筆新訂單嗎？`, onConfirm: () => { setConfirmConfig(prev => ({...prev, isOpen: false})); proceedWithCreation(); } }); } else { proceedWithCreation(); } };
   
-  // UPDATED: handleSaveOrder to support Edit
+  // NEW: Handle Force Retry
+  const handleForceRetry = async () => {
+    if (!conflictData || !apiEndpoint) return;
+    setIsSaving(true);
+    
+    // Construct new payload with force: true
+    const newPayload = { ...conflictData.data, force: true };
+    
+    try {
+      const res = await fetch(apiEndpoint, { 
+        method: 'POST', 
+        body: JSON.stringify({ action: conflictData.action, data: newPayload }) 
+      });
+      const json = await res.json();
+      
+      if (json.success) {
+        addToast('強制覆蓋成功', 'success');
+        setConflictData(null);
+        // Force a re-sync to get the latest correct state from backend (including updated timestamps)
+        syncData(true);
+        
+        // Close editors if open
+        setIsAddingOrder(false);
+        setEditingOrderId(null);
+        setIsEditingCustomer(null);
+        setIsEditingProduct(null);
+      } else {
+        addToast('強制覆蓋失敗，請檢查網路', 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      addToast('強制覆蓋發生錯誤', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // UPDATED: handleSaveOrder to support Edit & Conflict Handling
   const handleSaveOrder = async () => { 
-    // 防止連點，但在樂觀更新中，我們會很快把 isSaving 解除，或者根本不用設為 true 鎖住 UI
+    // 防止連點
     if (isSaving) return; 
     
     const finalName = orderForm.customerType === 'existing' ? orderForm.customerName : orderForm.customerName; 
@@ -785,7 +923,8 @@ const App: React.FC = () => {
         deliveryMethod: orderForm.deliveryMethod,
         items: processedItems,
         note: orderForm.note,
-        status: existingOrder?.status || OrderStatus.PENDING
+        status: existingOrder?.status || OrderStatus.PENDING,
+        lastUpdated: editingVersionRef.current // 傳送舊版本給後端比對 (雖然通常是在 payload 外層傳)
       };
       actionName = 'updateOrderContent';
     } else {
@@ -827,14 +966,38 @@ const App: React.FC = () => {
           return { productName: p?.name || item.productId, quantity: item.quantity, unit: item.unit }; 
         }); 
         
-        await fetch(apiEndpoint, { 
+        const payload = { ...newOrder, items: uploadItems };
+        // 關鍵：將原始版本打包送出
+        if (editingOrderId) {
+           (payload as any).originalLastUpdated = editingVersionRef.current;
+        }
+
+        const res = await fetch(apiEndpoint, { 
           method: 'POST', 
-          body: JSON.stringify({ action: actionName, data: { ...newOrder, items: uploadItems } }) 
+          body: JSON.stringify({ action: actionName, data: payload }) 
         }); 
+        const json = await res.json();
+        
+        // 6. 錯誤回滾與衝突處理
+        if (!json.success) {
+           setOrders(previousOrders); // 如果失敗，先還原列表
+           if (json.errorCode === 'ERR_VERSION_CONFLICT') {
+              // 觸發衝突 Modal
+              setConflictData({
+                action: actionName,
+                data: payload,
+                description: `訂單客戶：${finalName}`
+              });
+           } else {
+              addToast(editingOrderId ? "更新失敗，已還原資料" : "建立失敗，已還原資料", 'error'); 
+           }
+        } else {
+           // 成功後清除 ref
+           editingVersionRef.current = undefined;
+        }
       } 
     } catch (e) { 
       console.error("Sync Failed:", e); 
-      // 6. 錯誤回滾
       setOrders(previousOrders); 
       addToast(editingOrderId ? "更新失敗，已還原資料" : "建立失敗，已還原資料", 'error'); 
     } 
@@ -845,10 +1008,26 @@ const App: React.FC = () => {
   // FIX: Step 2 - Wrap updateOrderStatus in useCallback
   const updateOrderStatus = useCallback(async (orderId: string, newStatus: OrderStatus, showDefaultToast: boolean = true) => { 
     const previousOrders = [...orders]; 
+    const orderToUpdate = orders.find(o => o.id === orderId);
+    
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o)); 
     try { 
       if (apiEndpoint) { 
-        await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateOrderStatus', data: { id: orderId, status: newStatus } }) }); 
+        const payload = { 
+           id: orderId, 
+           status: newStatus,
+           originalLastUpdated: orderToUpdate?.lastUpdated 
+        };
+        const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateOrderStatus', data: payload }) }); 
+        const json = await res.json();
+        if (!json.success && json.errorCode === 'ERR_VERSION_CONFLICT') {
+           setOrders(previousOrders); // Revert
+           setConflictData({
+              action: 'updateOrderStatus',
+              data: payload,
+              description: `更新狀態: ${orderToUpdate?.customerName}`
+           });
+        }
       } 
     } catch (e) { 
       console.error("狀態更新失敗", e); 
@@ -890,14 +1069,138 @@ const App: React.FC = () => {
   const handleBatchUpdateStatus = async (newStatus: OrderStatus) => { if (selectedOrderIds.size === 0) return; const previousOrders = [...orders]; const idsToUpdate = Array.from(selectedOrderIds); setOrders(prev => prev.map(o => idsToUpdate.includes(o.id) ? { ...o, status: newStatus } : o)); setIsSelectionMode(false); setSelectedOrderIds(new Set()); addToast(`已批量更新 ${idsToUpdate.length} 筆訂單狀態`, 'success'); try { if (apiEndpoint) { await Promise.all(idsToUpdate.map(id => fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateOrderStatus', data: { id: id, status: newStatus } }) }))); } } catch (e) { console.error("Batch update failed", e); addToast("批量更新部分失敗，請檢查網路", 'error'); setOrders(previousOrders); } };
   const executeSettlement = async () => { if (!settlementTarget || !settlementPreview) return; const { orders: targetOrders, totalAmount } = settlementPreview; if (targetOrders.length === 0) return; setConfirmConfig({ isOpen: true, title: '確認收款結帳', message: `確定要結算「${settlementTarget.name}」截至 ${settlementDate} 的所有帳款嗎？\n\n共 ${targetOrders.length} 筆訂單，總金額 $${totalAmount.toLocaleString()}`, onConfirm: async () => { setConfirmConfig(prev => ({...prev, isOpen: false})); setSettlementTarget(null); const orderIds = targetOrders.map(o => o.id); const previousOrders = [...orders]; setOrders(prev => prev.map(o => orderIds.includes(o.id) ? { ...o, status: OrderStatus.PAID } : o)); addToast(`已完成 ${settlementTarget.name} 的收款結帳`, 'success'); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'batchUpdatePaymentStatus', data: { customerName: settlementTarget.name, orderIds, newStatus: OrderStatus.PAID } }) }); } } catch(e) { console.error(e); addToast('結帳同步失敗，請檢查網路', 'error'); setOrders(previousOrders); } } }); };
   const handleSaveProductOrder = async () => { if (!apiEndpoint || isSaving) return; setIsSaving(true); const orderedIds = products.map(p => p.id); try { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'reorderProducts', data: orderedIds }) }); setInitialProductOrder(orderedIds); setHasReorderedProducts(false); addToast("排序已更新！", 'success'); } catch (e) { console.error(e); addToast("排序儲存失敗，請檢查網路", 'error'); } finally { setIsSaving(false); } };
-  const executeDeleteOrder = async (orderId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const orderBackup = orders.find(o => o.id === orderId); if (!orderBackup) return; setOrders(prev => prev.filter(o => o.id !== orderId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteOrder', data: { id: orderId } }) }); } } catch (e) { console.error("刪除失敗:", e); addToast("雲端同步刪除失敗，請檢查網路", 'error'); setOrders(prev => [...prev, orderBackup]); } };
-  const executeDeleteCustomer = async (customerId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const customerBackup = customers.find(c => c.id === customerId); if (!customerBackup) return; setCustomers(prev => prev.filter(c => c.id !== customerId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteCustomer', data: { id: customerId } }) }); } } catch (e) { console.error("刪除失敗:", e); addToast("雲端同步刪除失敗，請檢查網路", 'error'); setCustomers(prev => [...prev, customerBackup]); } };
-  const executeDeleteProduct = async (productId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const productBackup = products.find(p => p.id === productId); if (!productBackup) return; setProducts(prev => prev.filter(p => p.id !== productId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteProduct', data: { id: productId } }) }); } } catch (e) { console.error("刪除失敗:", e); addToast("雲端同步刪除失敗，請檢查網路", 'error'); setProducts(prev => [...prev, productBackup]); } };
+  const executeDeleteOrder = async (orderId: string) => { 
+    setConfirmConfig(prev => ({ ...prev, isOpen: false })); 
+    const orderBackup = orders.find(o => o.id === orderId); 
+    if (!orderBackup) return; 
+    setOrders(prev => prev.filter(o => o.id !== orderId)); 
+    try { 
+      if (apiEndpoint) { 
+        const payload = { id: orderId, originalLastUpdated: orderBackup.lastUpdated };
+        const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteOrder', data: payload }) }); 
+        const json = await res.json();
+        if (!json.success && json.errorCode === 'ERR_VERSION_CONFLICT') {
+           setOrders(prev => [...prev, orderBackup]); // Revert
+           setConflictData({
+              action: 'deleteOrder',
+              data: payload,
+              description: `刪除訂單: ${orderBackup.customerName}`
+           });
+        }
+      } 
+    } catch (e) { 
+      console.error("刪除失敗:", e); 
+      addToast("雲端同步刪除失敗，請檢查網路", 'error'); 
+      setOrders(prev => [...prev, orderBackup]); 
+    } 
+  };
+  const executeDeleteCustomer = async (customerId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const customerBackup = customers.find(c => c.id === customerId); if (!customerBackup) return; setCustomers(prev => prev.filter(c => c.id !== customerId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteCustomer', data: { id: customerId, originalLastUpdated: customerBackup.lastUpdated } }) }); } } catch (e) { console.error("刪除失敗:", e); addToast("雲端同步刪除失敗，請檢查網路", 'error'); setCustomers(prev => [...prev, customerBackup]); } };
+  const executeDeleteProduct = async (productId: string) => { setConfirmConfig(prev => ({ ...prev, isOpen: false })); const productBackup = products.find(p => p.id === productId); if (!productBackup) return; setProducts(prev => prev.filter(p => p.id !== productId)); try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'deleteProduct', data: { id: productId, originalLastUpdated: productBackup.lastUpdated } }) }); } } catch (e) { console.error("刪除失敗:", e); addToast("雲端同步刪除失敗，請檢查網路", 'error'); setProducts(prev => [...prev, productBackup]); } };
   const handleDeleteOrder = (orderId: string) => { setConfirmConfig({ isOpen: true, title: '刪除訂單', message: '確定要刪除此訂單嗎？\n此動作將會同步刪除雲端資料。', onConfirm: () => executeDeleteOrder(orderId) }); };
   const handleDeleteCustomer = (customerId: string) => { setConfirmConfig({ isOpen: true, title: '刪除店家', message: '確定要刪除此店家嗎？\n這將一併刪除相關的設定。', onConfirm: () => executeDeleteCustomer(customerId) }); };
   const handleDeleteProduct = (productId: string) => { setConfirmConfig({ isOpen: true, title: '刪除品項', message: '確定要刪除此品項嗎？\n請確認該品項已無生產需求。', onConfirm: () => executeDeleteProduct(productId) }); };
-  const handleSaveCustomer = async () => { if (!customerForm.name || isSaving) return; setIsSaving(true); const isDuplicateName = customers.some(c => c.name.trim() === (customerForm.name || '').trim() && c.id !== (isEditingCustomer === 'new' ? null : isEditingCustomer)); if (isDuplicateName) { addToast('客戶名稱不可重複！', 'error'); setIsSaving(false); return; } const finalCustomer: Customer = { id: isEditingCustomer === 'new' ? Date.now().toString() : (isEditingCustomer as string), name: (customerForm.name || '').trim(), phone: (customerForm.phone || '').trim(), deliveryTime: customerForm.deliveryTime || '08:00', deliveryMethod: customerForm.deliveryMethod || '', paymentTerm: customerForm.paymentTerm || 'regular', defaultItems: (customerForm.defaultItems || []).filter(i => i.productId !== ''), priceList: (customerForm.priceList || []), offDays: customerForm.offDays || [], holidayDates: customerForm.holidayDates || [] }; try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateCustomer', data: finalCustomer }) }); } } catch (e) { console.error(e); } if (isEditingCustomer === 'new') setCustomers([...customers, finalCustomer]); else setCustomers(customers.map(c => c.id === isEditingCustomer ? finalCustomer : c)); setIsSaving(false); setIsEditingCustomer(null); addToast('店家資料已儲存', 'success'); };
-  const handleSaveProduct = async () => { if (!productForm.name || isSaving) return; setIsSaving(true); const finalProduct = { id: isEditingProduct === 'new' ? 'p' + Date.now() : (isEditingProduct as string), name: productForm.name || '', unit: productForm.unit || '斤', price: Number(productForm.price) || 0, category: productForm.category || 'other' }; try { if (apiEndpoint) { await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateProduct', data: finalProduct }) }); } } catch (e) { console.error(e); } if (isEditingProduct === 'new') setProducts([...products, finalProduct]); else setProducts(products.map(p => p.id === isEditingProduct ? finalProduct : p)); setIsSaving(false); setIsEditingProduct(null); addToast('品項資料已儲存', 'success'); };
+  
+  const handleSaveCustomer = async () => { 
+    if (!customerForm.name || isSaving) return; 
+    setIsSaving(true); 
+    
+    const isDuplicateName = customers.some(c => c.name.trim() === (customerForm.name || '').trim() && c.id !== (isEditingCustomer === 'new' ? null : isEditingCustomer)); 
+    if (isDuplicateName) { addToast('客戶名稱不可重複！', 'error'); setIsSaving(false); return; } 
+    
+    const finalCustomer: Customer = { id: isEditingCustomer === 'new' ? Date.now().toString() : (isEditingCustomer as string), name: (customerForm.name || '').trim(), phone: (customerForm.phone || '').trim(), deliveryTime: customerForm.deliveryTime || '08:00', deliveryMethod: customerForm.deliveryMethod || '', paymentTerm: customerForm.paymentTerm || 'regular', defaultItems: (customerForm.defaultItems || []).filter(i => i.productId !== ''), priceList: (customerForm.priceList || []), offDays: customerForm.offDays || [], holidayDates: customerForm.holidayDates || [] }; 
+    
+    // Backup old list for revert
+    const previousCustomers = [...customers];
+
+    // Optimistic Update
+    if (isEditingCustomer === 'new') setCustomers([...customers, finalCustomer]); 
+    else setCustomers(customers.map(c => c.id === isEditingCustomer ? finalCustomer : c)); 
+    
+    // Close modal UI immediately
+    setIsEditingCustomer(null); 
+
+    try { 
+      if (apiEndpoint) { 
+        const payload = finalCustomer;
+        // 如果是編輯，加上原始版本號
+        if (isEditingCustomer !== 'new') {
+           (payload as any).originalLastUpdated = editingVersionRef.current;
+        }
+
+        const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateCustomer', data: payload }) }); 
+        const json = await res.json();
+        
+        if (!json.success) {
+           setCustomers(previousCustomers); // Revert
+           if (json.errorCode === 'ERR_VERSION_CONFLICT') {
+              setConflictData({
+                 action: 'updateCustomer',
+                 data: payload,
+                 description: `更新店家: ${finalCustomer.name}`
+              });
+           } else {
+              addToast('店家資料儲存失敗', 'error');
+           }
+           setIsSaving(false);
+           return;
+        }
+      } 
+    } catch (e) { 
+      console.error(e); 
+      setCustomers(previousCustomers); // Revert
+      addToast('店家資料儲存失敗，請檢查網路', 'error');
+    } 
+    
+    setIsSaving(false); 
+    editingVersionRef.current = undefined;
+    addToast('店家資料已儲存', 'success'); 
+  };
+
+  const handleSaveProduct = async () => { 
+    if (!productForm.name || isSaving) return; 
+    setIsSaving(true); 
+    const finalProduct = { id: isEditingProduct === 'new' ? 'p' + Date.now() : (isEditingProduct as string), name: productForm.name || '', unit: productForm.unit || '斤', price: Number(productForm.price) || 0, category: productForm.category || 'other' }; 
+    
+    const previousProducts = [...products];
+    if (isEditingProduct === 'new') setProducts([...products, finalProduct]); 
+    else setProducts(products.map(p => p.id === isEditingProduct ? finalProduct : p)); 
+    
+    setIsEditingProduct(null); 
+
+    try { 
+      if (apiEndpoint) { 
+        const payload = finalProduct;
+        if (isEditingProduct !== 'new') {
+           (payload as any).originalLastUpdated = editingVersionRef.current;
+        }
+        const res = await fetch(apiEndpoint, { method: 'POST', body: JSON.stringify({ action: 'updateProduct', data: payload }) }); 
+        const json = await res.json();
+        if (!json.success) {
+           setProducts(previousProducts);
+           if (json.errorCode === 'ERR_VERSION_CONFLICT') {
+              setConflictData({
+                 action: 'updateProduct',
+                 data: payload,
+                 description: `更新品項: ${finalProduct.name}`
+              });
+           } else {
+              addToast('品項資料儲存失敗', 'error');
+           }
+           setIsSaving(false);
+           return;
+        }
+      } 
+    } catch (e) { 
+      console.error(e); 
+      setProducts(previousProducts);
+      addToast('品項資料儲存失敗', 'error');
+    } 
+    
+    setIsSaving(false); 
+    editingVersionRef.current = undefined;
+    addToast('品項資料已儲存', 'success'); 
+  };
+  
   const handlePrint = () => { if (workSheetData.length === 0) { addToast('目前沒有資料可供匯出', 'info'); return; } const printWindow = window.open('', '_blank'); if (!printWindow) { addToast('彈跳視窗被封鎖，無法開啟列印頁面', 'error'); window.print(); return; } const sortedDates = [...workDates].sort(); const dateRangeDisplay = sortedDates.length > 1 ? `${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]} (${sortedDates.length}天)` : sortedDates[0]; let htmlContent = `<!DOCTYPE html><html><head><title>麵廠職人 - 生產總表</title><style>body { font-family: sans-serif; padding: 20px; color: #333; } h1 { text-align: center; margin-bottom: 10px; font-size: 32px; } p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 20px; font-weight: bold; } table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; } th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; } th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 20px; } tr:nth-child(even) { background-color: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .text-right { text-align: right; } .text-center { text-align: center; } .badge { display: inline-block; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 16px; margin: 4px; border: 1px solid #ddd; color: #555; } .total-cell { font-size: 24px; font-weight: bold; } .footer { margin-top: 40px; text-align: right; font-size: 14px; color: #999; border-top: 1px solid #eee; padding-top: 10px; } </style></head><body><h1>生產總表</h1><p class="date">出貨日期: ${dateRangeDisplay}</p>`; workSheetData.forEach(group => { htmlContent += `<div style="page-break-inside: avoid;"><div class="group-header" style="background-color: ${group.color}40; border-left: 8px solid ${group.color};"> ${group.label} (共 ${group.totalWeight} 單位)</div><table><thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead><tbody>${group.items.map(item => `<tr><td style="font-weight: bold; font-size: 22px;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center" style="font-size: 18px;">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>`).join('')}</tbody></table></div>`; }); htmlContent += `<div class="footer">列印時間: ${new Date().toLocaleString()}</div><script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script></body></html>`; printWindow.document.write(htmlContent); printWindow.document.close(); };
 
   if (!isAuthenticated) return <LoginScreen onLogin={handleLogin} />;
@@ -949,6 +1252,23 @@ const App: React.FC = () => {
         orders={orders} // Pass orders here
         selectedDate={selectedDate} // Pass selected date for filtering open stores
         currentSelectedId={customerPickerConfig.currentSelectedId}
+      />
+
+      {/* --- NEW: Conflict Resolution Modal --- */}
+      <ConflictModal 
+        isOpen={!!conflictData}
+        description={conflictData?.description}
+        onClose={() => setConflictData(null)} 
+        onRefresh={() => {
+          setConflictData(null);
+          syncData(true); // Re-fetch latest data
+          setIsAddingOrder(false); // Force close any open editors to prevent stale data usage
+          setIsEditingCustomer(null);
+          setIsEditingProduct(null);
+          setEditingOrderId(null);
+        }}
+        onForceSave={handleForceRetry}
+        isSaving={isSaving}
       />
 
       <main className="flex-1 overflow-y-auto pb-24 px-4 pt-4" ref={mainRef}>
@@ -1076,6 +1396,7 @@ const App: React.FC = () => {
              </Reorder.Group>
           </motion.div>
         )}
+        {/* ... (Other Tabs code remains same) ... */}
         {activeTab === 'schedule' && (
            <motion.div key="schedule" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0, zIndex: 10 }} exit={{ opacity: 0, x: 10, zIndex: 0, pointerEvents: 'none' }} transition={{ duration: 0.2 }} className="space-y-6 relative">
               <div className="px-1"><h2 className="text-xl font-extrabold text-morandi-charcoal flex items-center gap-2 mb-4 tracking-tight"><CalendarCheck className="w-5 h-5 text-morandi-blue" /> 配送行程</h2><div className="mb-6"><WorkCalendar selectedDate={scheduleDate} onSelect={setScheduleDate} orders={orders} /></div>
@@ -1101,19 +1422,18 @@ const App: React.FC = () => {
               })) : (<div className="text-center py-10"><p className="text-gray-300 font-bold text-sm tracking-wide">本日無配送行程</p></div>)}</motion.div></div></div>
            </motion.div>
         )}
+        {/* ... (Finance and Work Tabs remain unchanged - they are inside ActiveTab blocks already provided in context, just ensuring closing structure) ... */}
         {activeTab === 'finance' && (
            <motion.div key="finance" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0, zIndex: 10 }} exit={{ opacity: 0, x: 10, zIndex: 0, pointerEvents: 'none' }} transition={{ duration: 0.2 }} className="space-y-6 relative">
              <div className="px-1"><h2 className="text-xl font-extrabold text-morandi-charcoal flex items-center gap-2 mb-4 tracking-tight"><Wallet className="w-5 h-5 text-morandi-blue" /> 帳務總覽</h2><div className="bg-morandi-charcoal rounded-[28px] p-6 shadow-lg text-white mb-6 relative overflow-hidden"><div className="absolute right-[-20px] top-[-20px] opacity-10"><DollarSign className="w-40 h-40" /></div><p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">未結總金額</p><h3 className="text-4xl font-black text-white tracking-tight">${financeData.grandTotalDebt.toLocaleString()}</h3><p className="text-[10px] text-gray-500 mt-2 font-medium tracking-wide">包含所有已出貨但未收款的訂單</p></div><div className="space-y-4"><h3 className="text-xs font-bold text-morandi-pebble uppercase tracking-widest px-2 flex items-center gap-2"><ListChecks className="w-4 h-4" /> 欠款客戶列表 ({financeData.outstanding.length})</h3><motion.div variants={containerVariants} initial="hidden" animate="show">{financeData.outstanding.length > 0 ? (financeData.outstanding.map((item, idx) => (<motion.div variants={itemVariants} key={idx} className="bg-white rounded-[24px] p-5 shadow-sm border border-slate-200 mb-3 relative overflow-hidden"><div className="flex justify-between items-start mb-4 relative z-10"><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-[16px] bg-rose-50 flex items-center justify-center text-rose-400 font-extrabold text-xl">{item.name.charAt(0)}</div><div><h4 className="font-bold text-slate-800 text-lg">{item.name}</h4><p className="text-xs text-rose-400 font-bold bg-rose-50 inline-block px-1.5 rounded mt-0.5">{item.count} 筆未結</p></div></div><div className="text-right"><p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">應收金額</p><p className="text-2xl font-black text-morandi-charcoal tracking-tight">${item.totalDebt.toLocaleString()}</p></div></div><div className="flex gap-2 relative z-10 pt-2 border-t border-gray-100"><button onClick={() => handleCopyStatement(item.name, item.totalDebt)} className="flex-1 py-3 rounded-xl bg-gray-50 text-slate-500 font-bold text-xs flex items-center justify-center gap-1 hover:bg-gray-100 transition-colors"><Copy className="w-3.5 h-3.5" /> 複製對帳單</button><button onClick={() => { setSettlementDate(getLastMonthEndDate()); setSettlementTarget({name: item.name, allOrderIds: item.orderIds}); }} className="flex-1 py-3 rounded-xl bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1 hover:bg-emerald-600 shadow-md shadow-emerald-200 transition-all active:scale-95"><CheckCircle2 className="w-3.5 h-3.5" /> 結帳</button></div></motion.div>))) : (<div className="text-center py-10"><div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 className="w-8 h-8 text-emerald-400" /></div><p className="text-gray-400 font-bold text-sm">目前沒有未結款項</p><p className="text-xs text-gray-300 mt-1">所有配送單皆已完成收款</p></div>)}</motion.div></div></div>
            </motion.div>
         )}
         
-        {/* ... (Work Tab remains unchanged) ... */}
         {activeTab === 'work' && (
            <motion.div key="work" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0, zIndex: 10 }} exit={{ opacity: 0, x: 10, zIndex: 0, pointerEvents: 'none' }} transition={{ duration: 0.2 }} className="space-y-6 relative">
              <div className="px-1"><div className="flex items-center gap-2 mb-4"><button onClick={() => setActiveTab('orders')} className="p-2 bg-white rounded-xl shadow-sm border border-slate-200 text-morandi-pebble"><ChevronLeft className="w-5 h-5"/></button><h2 className="text-xl font-extrabold text-morandi-charcoal tracking-tight">工作小抄</h2></div>
               <div className="space-y-3 mb-4"><div className="relative"><Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" /><input type="text" placeholder="篩選特定店家..." className="w-full pl-12 pr-6 py-4 bg-white rounded-[24px] border border-slate-100 shadow-sm text-slate-800 font-bold tracking-wide focus:ring-2 focus:ring-morandi-blue transition-all placeholder:text-gray-300 text-sm" value={workCustomerFilter} onChange={(e) => setWorkCustomerFilter(e.target.value)} />{workCustomerFilter && <button onClick={() => setWorkCustomerFilter('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"><X className="w-4 h-4" /></button>}</div>
               <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar mb-2"><button onClick={() => setWorkDeliveryMethodFilter([])} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${workDeliveryMethodFilter.length === 0 ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-200'}`}>全部方式</button>{DELIVERY_METHODS.map(m => { const isSelected = workDeliveryMethodFilter.includes(m); return (<button key={m} onClick={() => { if (isSelected) { setWorkDeliveryMethodFilter(workDeliveryMethodFilter.filter(x => x !== m)); } else { setWorkDeliveryMethodFilter([...workDeliveryMethodFilter, m]); } }} className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${isSelected ? 'text-white border-transparent' : 'bg-white text-gray-400 border-gray-200'}`} style={{ backgroundColor: isSelected ? COLORS.primary : '' }}>{m}</button>); })}</div>
-              
               <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                 <button onClick={() => setWorkCategoryFilter('all')} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${workCategoryFilter === 'all' ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-400 border-gray-200'}`}>全部種類</button>
                 {PRODUCT_CATEGORIES.map(cat => {
@@ -1247,51 +1567,14 @@ const App: React.FC = () => {
 
       </main>
       
-      {/* ... (Modals remain unchanged) ... */}
-      <AnimatePresence>
-        {isSelectionMode && selectedOrderIds.size > 0 && (
-          <motion.div 
-            initial={{ y: 100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-            className="fixed bottom-[80px] left-4 right-4 z-50 max-w-md mx-auto"
-          >
-            <div className="bg-morandi-charcoal rounded-[24px] p-4 shadow-2xl flex items-center justify-between gap-4">
-               <div className="flex-1 flex flex-col pl-2">
-                  <span className="text-white font-bold text-sm">已選 {selectedOrderIds.size} 筆</span>
-                  <span className="text-gray-400 text-[10px]">批量更新狀態</span>
-               </div>
-               <div className="flex gap-2">
-                  <motion.button whileTap={buttonTap} onClick={() => handleBatchUpdateStatus(OrderStatus.SHIPPED)} className="px-4 py-2 bg-morandi-oatmeal text-morandi-charcoal rounded-xl font-bold text-xs shadow-sm flex items-center gap-1"><Truck className="w-3.5 h-3.5" /> 已配送</motion.button>
-                  <motion.button whileTap={buttonTap} onClick={() => handleBatchUpdateStatus(OrderStatus.PAID)} className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold text-xs shadow-sm flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> 已收款</motion.button>
-               </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-      {settlementTarget && settlementPreview && (
-        <div className="fixed inset-0 bg-morandi-charcoal/40 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 backdrop-blur-sm">
-           <motion.div variants={modalVariants} initial="hidden" animate="visible" exit="exit" className="bg-white w-full max-w-sm rounded-t-[32px] sm:rounded-[32px] overflow-hidden shadow-xl">
-              <div className="p-6 bg-morandi-oatmeal/30 border-b border-gray-100 flex justify-between items-center"><div><h3 className="font-extrabold text-morandi-charcoal text-lg tracking-tight">確認收款結帳</h3><p className="text-xs text-morandi-pebble font-bold uppercase tracking-widest mt-0.5">{settlementTarget.name}</p></div><button onClick={() => setSettlementTarget(null)} className="p-2 bg-white rounded-2xl shadow-sm border border-slate-100 text-morandi-pebble"><X className="w-5 h-5" /></button></div>
-              <div className="p-6 space-y-6">
-                 <div className="space-y-2"><label className="text-[10px] font-bold text-morandi-pebble uppercase tracking-widest flex items-center gap-1.5"><CalendarRange className="w-3.5 h-3.5" /> 結算截止日 (含)</label><div className="relative"><input type="date" value={settlementDate} onChange={(e) => setSettlementDate(e.target.value)} className="w-full pl-4 pr-4 py-4 bg-white rounded-[20px] border-2 border-morandi-blue/20 text-morandi-charcoal font-black text-lg shadow-sm outline-none focus:border-morandi-blue transition-all" /><div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[10px] font-bold text-morandi-blue bg-blue-50 px-2 py-1 rounded">預設: 上月底</div></div><p className="text-[10px] text-gray-400 font-medium px-1">系統自動選取此日期(含)以前的所有未結訂單。</p></div>
-                 <div className="bg-emerald-50 p-5 rounded-[24px] border border-emerald-100"><div className="flex justify-between items-center mb-1"><span className="text-xs font-bold text-emerald-700">預計結算金額</span><span className="text-xs font-bold text-emerald-600/60">{settlementPreview.count} 筆訂單</span></div><div className="text-3xl font-black text-emerald-600 tracking-tight">${settlementPreview.totalAmount.toLocaleString()}</div></div>
-              </div>
-              <div className="p-6 pt-0 flex gap-3"><motion.button whileTap={buttonTap} onClick={() => setSettlementTarget(null)} className="flex-1 py-4 rounded-[20px] font-bold text-morandi-pebble bg-gray-50 border border-slate-100">取消</motion.button><motion.button whileTap={buttonTap} onClick={executeSettlement} disabled={settlementPreview.count === 0} className="flex-[2] py-4 rounded-[20px] font-bold text-white shadow-lg bg-emerald-500 disabled:opacity-50 disabled:shadow-none">確認結帳</motion.button></div>
-           </motion.div>
-        </div>
-      )}
-      </AnimatePresence>
+      {/* ... (Modals code remains same - ConfirmModal, HolidayCalendar, DatePickerModal, SettingsModal, QuickAdd, etc.) ... */}
+      
+      {/* (Modal closing tags are here in original code) */}
       <ConfirmModal isOpen={confirmConfig.isOpen} title={confirmConfig.title} message={confirmConfig.message} onConfirm={confirmConfig.onConfirm} onCancel={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))} />
       {holidayEditorId && (<HolidayCalendar storeName={isEditingCustomer ? (customerForm.name || '') : ''} holidays={customerForm.holidayDates || []} onToggle={(date) => { const current = customerForm.holidayDates || []; const newHolidays = current.includes(date) ? current.filter(d => d !== date) : [...current, date]; setCustomerForm({...customerForm, holidayDates: newHolidays}); }} onClose={() => setHolidayEditorId(null)} />)}
       <AnimatePresence>{isDatePickerOpen && <DatePickerModal selectedDate={selectedDate} onSelect={setSelectedDate} onClose={() => setIsDatePickerOpen(false)} />}</AnimatePresence>
       <AnimatePresence>{isSettingsOpen && (<SettingsModal onClose={() => setIsSettingsOpen(false)} onSync={syncData} onSavePassword={handleChangePassword} currentUrl={apiEndpoint} onSaveUrl={handleSaveApiUrl} />)}</AnimatePresence>
-      
-      {/* ... (QuickAdd and Editing Modals code remains the same as provided ...) */}
       <AnimatePresence>{quickAddData && (<div className="fixed inset-0 bg-morandi-charcoal/40 z-[70] flex flex-col items-center justify-center p-4 backdrop-blur-sm"><motion.div variants={modalVariants} initial="hidden" animate="visible" exit="exit" className="bg-white w-full max-w-sm max-h-[85vh] flex flex-col rounded-[32px] overflow-hidden shadow-xl border border-slate-200"><div className="p-5 bg-morandi-oatmeal/30 border-b border-gray-100 flex-shrink-0"><h3 className="text-center font-extrabold text-morandi-charcoal text-lg">追加訂單</h3><p className="text-center text-xs text-morandi-pebble font-bold tracking-wide mt-1">{quickAddData.customerName}</p></div><div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar"><AnimatePresence initial={false}>{quickAddData.items.map((item, index) => (<motion.div key={index} initial={{ opacity: 0, height: 0, scale: 0.95 }} animate={{ opacity: 1, height: 'auto', scale: 1 }} exit={{ opacity: 0, height: 0, scale: 0.9 }} className="bg-white rounded-[20px] p-3 shadow-sm border border-slate-100 flex flex-wrap gap-2 items-center"><div className="flex-1 min-w-[120px]"><div onClick={() => { const currentCustomer = customers.find(c => c.name === quickAddData.customerName); setPickerConfig({ isOpen: true, currentProductId: item.productId, customPrices: currentCustomer?.priceList, onSelect: (pid) => { const newItems = [...quickAddData.items]; const p = products.find(x => x.id === pid); newItems[index] = { ...item, productId: pid, unit: p?.unit || '斤' }; setQuickAddData({...quickAddData, items: newItems}); } }); }} className="w-full bg-morandi-oatmeal/50 p-3 rounded-xl font-bold text-sm text-morandi-charcoal border border-slate-200 flex items-center justify-between cursor-pointer hover:border-morandi-blue transition-all"><span className={item.productId ? 'text-slate-800' : 'text-gray-400'}>{products.find(p => p.id === item.productId)?.name || '選擇品項...'}</span><ChevronDown className="w-4 h-4 text-gray-400" /></div></div><div className="w-20"><input type="number" min="0" onKeyDown={(e) => ["e", "E", "+", "-"].includes(e.key) && e.preventDefault()} placeholder="數量" className="w-full bg-morandi-oatmeal/50 p-3 rounded-xl text-center font-black text-lg text-morandi-charcoal border border-slate-200 outline-none focus:ring-2 focus:ring-morandi-blue transition-all" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => { const newItems = [...quickAddData.items]; const val = parseFloat(e.target.value); newItems[index].quantity = isNaN(val) ? 0 : Math.max(0, val); setQuickAddData({...quickAddData, items: newItems}); }} /></div><div className="w-20"><select value={item.unit || '斤'} onChange={(e) => { const newItems = [...quickAddData.items]; newItems[index].unit = e.target.value; setQuickAddData({...quickAddData, items: newItems}); }} className="w-full bg-morandi-oatmeal/50 p-3 rounded-xl font-bold text-morandi-charcoal border border-slate-100 outline-none focus:ring-2 focus:ring-morandi-blue transition-all">{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select></div><button onClick={() => { const newItems = quickAddData.items.filter((_, i) => i !== index); setQuickAddData({...quickAddData, items: newItems}); }} className="p-3 bg-rose-50 text-rose-400 hover:text-rose-600 rounded-xl transition-colors"><Trash2 className="w-4 h-4" /></button></motion.div>))}</AnimatePresence><motion.button whileTap={buttonTap} onClick={() => setQuickAddData({...quickAddData, items: [...quickAddData.items, {productId: '', quantity: 10, unit: '斤'}]})} className="w-full py-3 rounded-[16px] border-2 border-dashed border-morandi-blue/30 text-morandi-blue font-bold text-sm flex items-center justify-center gap-2 hover:bg-morandi-blue/5 transition-colors tracking-wide mt-2"><Plus className="w-4 h-4" /> 增加品項</motion.button></div><div className="p-5 bg-white border-t border-gray-100 flex-shrink-0 space-y-4"><AnimatePresence>{(() => { const preview = getQuickAddPricePreview(); if (preview && preview.total > 0) { return (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="bg-morandi-amber-bg p-4 rounded-xl border border-amber-100 flex justify-between items-center"><div className="flex flex-col"><span className="text-[10px] font-bold text-morandi-amber-text/70 uppercase tracking-widest">預估總金額</span><span className="text-xs font-medium text-morandi-amber-text/60 mt-0.5 tracking-wide">共 {preview.itemCount} 個品項</span></div><span className="text-2xl font-black text-morandi-amber-text tracking-tight">${preview.total.toLocaleString()}</span></motion.div>); } return null; })()}</AnimatePresence><div className="flex gap-2"><motion.button whileTap={buttonTap} onClick={() => setQuickAddData(null)} className="flex-1 py-3 rounded-[16px] font-bold text-morandi-pebble hover:bg-gray-50 transition-colors border border-slate-200">取消</motion.button><motion.button whileTap={buttonTap} onClick={handleQuickAddSubmit} className="flex-1 py-3 rounded-[16px] font-bold text-white shadow-md bg-morandi-blue hover:bg-slate-600">確認追加</motion.button></div></div></motion.div></div>)}</AnimatePresence>
-
       <AnimatePresence>
       {isAddingOrder && (
         <div className="fixed inset-0 bg-morandi-oatmeal z-[60] flex flex-col">

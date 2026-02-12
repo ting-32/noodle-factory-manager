@@ -12,6 +12,7 @@ export interface Product {
   unit: string;
   price?: number; // 預設單價
   category?: string; // 新增：產品分類
+  lastUpdated?: number; // 版本控制時間戳
 }
 
 export interface DefaultItem {
@@ -40,6 +41,7 @@ export interface Customer {
   priceList?: CustomerPrice[]; // 新增：專屬價目表
   offDays: number[]; // 0-6 (Sun-Sat) - 週期性公休
   holidayDates: string[]; // ['2026-01-20', ...] - 特定日期公休
+  lastUpdated?: number; // 版本控制時間戳
 }
 
 export interface OrderItem {
@@ -58,10 +60,12 @@ export interface Order {
   note: string;
   status: OrderStatus;
   deliveryMethod?: string; // 新增：訂單的配送方式
+  lastUpdated?: number; // 版本控制時間戳
 }
 
 export interface GASResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  errorCode?: string; // 新增錯誤代碼支援
 }

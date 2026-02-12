@@ -82,7 +82,13 @@ function doPost(e) {
       .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     Logger.log("Error in doPost: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() }))
+    // 如果是版本衝突，回傳特定的 errorCode
+    const isConflict = error.toString().includes("ERR_VERSION_CONFLICT");
+    return ContentService.createTextOutput(JSON.stringify({ 
+      success: false, 
+      error: error.toString(),
+      errorCode: isConflict ? "ERR_VERSION_CONFLICT" : "UNKNOWN_ERROR"
+    }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }
@@ -161,7 +167,8 @@ function getData(startDateStr) {
     offDays: c.OffDays || c.offDays || c.公休日週期JSON || c.公休日週期,
     holidayDates: c.HolidayDates || c.holidayDates || c.特定公休日JSON || c.特定公休日,
     deliveryMethod: c.DeliveryMethod || c.deliveryMethod || c.配送方式,
-    paymentTerm: c.PaymentTerm || c.paymentTerm || c.付款週期
+    paymentTerm: c.PaymentTerm || c.paymentTerm || c.付款週期,
+    lastUpdated: c.LastUpdated ? new Date(c.LastUpdated).getTime() : 0
   }));
 
   const products = getSheetData(sheets.PRODUCTS).map(p => ({
@@ -169,7 +176,8 @@ function getData(startDateStr) {
     name: p.Name || p.name || p.品項,
     unit: p.Unit || p.unit || p.單位,
     price: p.Price || p.price || p.單價,
-    category: p.Category || p.category || p.分類
+    category: p.Category || p.category || p.分類,
+    lastUpdated: p.LastUpdated ? new Date(p.LastUpdated).getTime() : 0
   }));
 
   const ordersRaw = getSheetData(sheets.ORDERS);
@@ -184,7 +192,8 @@ function getData(startDateStr) {
     unit: o.Unit || o.unit || o.單位,
     note: o.Note || o.note || o.備註,
     status: o.Status || o.status || o.狀態,
-    deliveryMethod: o.DeliveryMethod || o.deliveryMethod || o.配送方式
+    deliveryMethod: o.DeliveryMethod || o.deliveryMethod || o.配送方式,
+    lastUpdated: o.LastUpdated ? new Date(o.LastUpdated).getTime() : 0
   }));
 
   if (startDateStr) {
@@ -195,14 +204,40 @@ function getData(startDateStr) {
   return { customers, products, orders };
 }
 
+// Helper to check for header and add if missing
+function ensureHeader(sheet, headerName) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  let index = headers.indexOf(headerName);
+  if (index === -1) {
+    index = headers.length;
+    sheet.getRange(1, index + 1).setValue(headerName);
+  }
+  return index;
+}
+
+// Helper to check version conflict
+function checkVersionConflict(currentLastUpdated, originalLastUpdated) {
+  if (!currentLastUpdated) return; // No previous version, safe to write
+  const currentTs = new Date(currentLastUpdated).getTime();
+  // Allow a small buffer or strict check. Strict check:
+  if (originalLastUpdated !== undefined && currentTs > originalLastUpdated) {
+    throw new Error("ERR_VERSION_CONFLICT: Data has been modified by another user.");
+  }
+}
+
 function createOrder(orderData) {
   const sheet = getSheets().ORDERS;
   
-  if (sheet.getMaxColumns() < 11) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), 11 - sheet.getMaxColumns());
+  // Ensure we have enough columns and LastUpdated header
+  ensureHeader(sheet, "LastUpdated");
+  
+  // 檢查是否需要擴充欄位 (基本11欄 + LastUpdated 1欄 = 12)
+  if (sheet.getMaxColumns() < 12) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 12 - sheet.getMaxColumns());
   }
 
   const timestamp = Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
+  const lastUpdatedTs = new Date().getTime(); // Unix timestamp for robust syncing
   
   const rows = orderData.items.map(item => [
     timestamp,
@@ -215,32 +250,53 @@ function createOrder(orderData) {
     orderData.note || "",
     orderData.status || "PENDING",
     orderData.deliveryMethod || "",
-    item.unit || "斤" 
+    item.unit || "斤",
+    lastUpdatedTs // New Field
   ]);
   
   if (rows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 11).setValues(rows);
+    const lastRow = sheet.getLastRow();
+    sheet.getRange(lastRow + 1, 1, rows.length, 12).setValues(rows);
   }
   return true;
 }
 
 function updateOrderContent(orderData) {
   const sheet = getSheets().ORDERS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated"); // 0-based index
   const values = sheet.getDataRange().getValues();
   
   const targetId = String(orderData.id).trim();
   let originalCreatedAt = "";
   
+  // 1. Conflict Detection Phase
+  // Find ALL rows related to this order first to check timestamps
+  // Since an order splits into multiple rows (items), checking one valid row is enough.
   for (let i = values.length - 1; i >= 1; i--) {
     const sheetId = String(values[i][1]).trim();
     if (sheetId === targetId) {
+      const currentLastUpdated = values[i][lastUpdatedColIdx];
+      // Only check conflict if force is not true
+      if (!orderData.force) {
+        checkVersionConflict(currentLastUpdated, orderData.originalLastUpdated);
+      }
+      // If we are here, no conflict for this row.
+      // Capture creation time to preserve it
       if (!originalCreatedAt) originalCreatedAt = values[i][0];
+    }
+  }
+
+  // 2. Deletion Phase (Safe to delete now)
+  for (let i = values.length - 1; i >= 1; i--) {
+    const sheetId = String(values[i][1]).trim();
+    if (sheetId === targetId) {
       sheet.deleteRow(i + 1);
     }
   }
 
   const timestamp = originalCreatedAt || Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
-  
+  const newLastUpdatedTs = new Date().getTime();
+
   const rows = orderData.items.map(item => [
     timestamp,
     orderData.id,
@@ -252,24 +308,33 @@ function updateOrderContent(orderData) {
     orderData.note || "",
     orderData.status || "PENDING",
     orderData.deliveryMethod || "",
-    item.unit || "斤"
+    item.unit || "斤",
+    newLastUpdatedTs
   ]);
 
   if (rows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 11).setValues(rows);
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 12).setValues(rows);
   }
   return true;
 }
 
 function updateOrderStatus(data) {
   const sheet = getSheets().ORDERS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   let updated = false;
   const targetId = String(data.id).trim();
+  const newLastUpdatedTs = new Date().getTime();
   
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][1]).trim() === targetId) {
-      sheet.getRange(i + 1, 9).setValue(data.status);
+      // Conflict check if provided and not forced
+      if (data.originalLastUpdated !== undefined && !data.force) {
+         checkVersionConflict(values[i][lastUpdatedColIdx], data.originalLastUpdated);
+      }
+      
+      sheet.getRange(i + 1, 9).setValue(data.status); // Status column
+      sheet.getRange(i + 1, lastUpdatedColIdx + 1).setValue(newLastUpdatedTs); // Update timestamp
       updated = true;
     }
   }
@@ -280,13 +345,16 @@ function updateOrderStatus(data) {
 
 function batchUpdatePaymentStatus(data) {
   const sheet = getSheets().ORDERS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   const orderIds = new Set(data.orderIds.map(id => String(id).trim()));
+  const newLastUpdatedTs = new Date().getTime();
   
   for (let i = 1; i < values.length; i++) {
     const id = String(values[i][1]).trim();
     if (orderIds.has(id)) {
       sheet.getRange(i + 1, 9).setValue(data.newStatus);
+      sheet.getRange(i + 1, lastUpdatedColIdx + 1).setValue(newLastUpdatedTs);
     }
   }
   return true;
@@ -294,9 +362,19 @@ function batchUpdatePaymentStatus(data) {
 
 function deleteOrder(data) {
   const sheet = getSheets().ORDERS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   const targetId = String(data.id).trim();
   
+  // Check conflict first
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][1]).trim() === targetId) {
+       if (data.originalLastUpdated !== undefined && !data.force) {
+         checkVersionConflict(values[i][lastUpdatedColIdx], data.originalLastUpdated);
+       }
+    }
+  }
+
   for (let i = values.length - 1; i >= 1; i--) {
     if (String(values[i][1]).trim() === targetId) {
       sheet.deleteRow(i + 1);
@@ -307,21 +385,32 @@ function deleteOrder(data) {
 
 function reorderProducts(orderedIds) {
   const sheet = getSheets().PRODUCTS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return true;
+
+  const newLastUpdatedTs = new Date().getTime();
 
   const headers = values[0];
   const rows = values.slice(1);
   const map = new Map();
   rows.forEach(r => map.set(String(r[0]), r));
   const newRows = [];
+  
   orderedIds.forEach(id => {
     if (map.has(String(id))) {
-      newRows.push(map.get(String(id)));
+      const row = map.get(String(id));
+      row[lastUpdatedColIdx] = newLastUpdatedTs; 
+      newRows.push(row);
       map.delete(String(id));
     }
   });
-  map.forEach(r => newRows.push(r));
+  
+  map.forEach(r => {
+      r[lastUpdatedColIdx] = newLastUpdatedTs;
+      newRows.push(r);
+  });
+  
   sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
   sheet.getRange(2, 1, newRows.length, newRows[0].length).setValues(newRows);
   return true;
@@ -329,6 +418,7 @@ function reorderProducts(orderedIds) {
 
 function updateCustomer(data) {
   const sheet = getSheets().CUSTOMERS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
   const targetId = String(data.id).trim();
@@ -336,10 +426,15 @@ function updateCustomer(data) {
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === targetId) {
       rowIndex = i + 1;
+      if (!data.force) {
+        checkVersionConflict(values[i][lastUpdatedColIdx], data.originalLastUpdated);
+      }
       break;
     }
   }
   
+  const newLastUpdatedTs = new Date().getTime();
+
   const rowData = [
     data.id,
     data.name,
@@ -350,7 +445,8 @@ function updateCustomer(data) {
     JSON.stringify(data.holidayDates),
     JSON.stringify(data.priceList),
     data.deliveryMethod,
-    data.paymentTerm
+    data.paymentTerm,
+    newLastUpdatedTs
   ];
   
   if (rowIndex > 0) {
@@ -363,11 +459,15 @@ function updateCustomer(data) {
 
 function deleteCustomer(data) {
   const sheet = getSheets().CUSTOMERS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   const targetId = String(data.id).trim();
   
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === targetId) {
+      if (data.originalLastUpdated !== undefined && !data.force) {
+         checkVersionConflict(values[i][lastUpdatedColIdx], data.originalLastUpdated);
+      }
       sheet.deleteRow(i + 1);
       return true;
     }
@@ -377,6 +477,7 @@ function deleteCustomer(data) {
 
 function updateProduct(data) {
   const sheet = getSheets().PRODUCTS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   let rowIndex = -1;
   const targetId = String(data.id).trim();
@@ -384,16 +485,22 @@ function updateProduct(data) {
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === targetId) {
       rowIndex = i + 1;
+      if (!data.force) {
+        checkVersionConflict(values[i][lastUpdatedColIdx], data.originalLastUpdated);
+      }
       break;
     }
   }
   
+  const newLastUpdatedTs = new Date().getTime();
+
   const rowData = [
     data.id,
     data.name,
     data.unit,
     data.price,
-    data.category
+    data.category,
+    newLastUpdatedTs
   ];
   
   if (rowIndex > 0) {
@@ -406,11 +513,15 @@ function updateProduct(data) {
 
 function deleteProduct(data) {
   const sheet = getSheets().PRODUCTS;
+  const lastUpdatedColIdx = ensureHeader(sheet, "LastUpdated");
   const values = sheet.getDataRange().getValues();
   const targetId = String(data.id).trim();
   
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === targetId) {
+      if (data.originalLastUpdated !== undefined && !data.force) {
+         checkVersionConflict(values[i][lastUpdatedColIdx], data.originalLastUpdated);
+      }
       sheet.deleteRow(i + 1);
       return true;
     }
