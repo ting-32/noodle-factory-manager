@@ -171,6 +171,7 @@ export const useVoiceAssistant = ({
               "note": "string (any extra notes)" 
             }
           ],
+          "relativeDay": number, // 0=今天, 1=明天, 2=後天... (預設為 0)
           "globalNote": "string (any remaining text)"
         }
         
@@ -179,7 +180,8 @@ export const useVoiceAssistant = ({
         2. 如果語音中包含產品名稱，請填入 items。
         3. 數量請自動解析，如果沒有單位預設為 "斤"。
         4. 如果單位是 "包" 或 "袋"，請嘗試換算成 "斤" (油麵/陽春麵/意麵=5斤, 板條=2.5斤, 皮類=1斤)。
-        5. 只回傳 JSON，不要有其他文字。
+        5. 如果語音提到時間，請解析為相對天數 (relativeDay)。例如："今天"=0, "明天"=1, "後天"=2。預設為 0。
+        6. 只回傳 JSON，不要有其他文字。
       `;
 
       const result = await ai.models.generateContent({
@@ -197,6 +199,7 @@ export const useVoiceAssistant = ({
           matchedCustomerId: parsed.customerId,
           matchedCustomerName: customers.find(c => c.id === parsed.customerId)?.name || '',
           items: parsed.items,
+          relativeDay: parsed.relativeDay ?? 0, // Default to 0 (Today)
           globalNote: parsed.globalNote
       };
 
@@ -207,12 +210,20 @@ export const useVoiceAssistant = ({
   };
 
   const processWithRules = async (transcript: string) => {
-    // 1. 預處理：移除無意義的語助詞
-    let cleanText = transcript.replace(/那個|然後|幫我|一下|麻煩|請/g, '');
+      // 1. 預處理：移除無意義的語助詞
+      let cleanText = transcript.replace(/那個|然後|幫我|一下|麻煩|請/g, '');
       const normalizedTranscript = normalize(cleanText);
       
       console.log("Clean Transcript:", cleanText);
       console.log("Normalized Transcript:", normalizedTranscript);
+
+      // 0. 解析相對日期 (規則模式)
+      let relativeDay = 0; // 預設今天
+      if (normalizedTranscript.includes('明天')) relativeDay = 1;
+      if (normalizedTranscript.includes('後天')) relativeDay = 2;
+      
+      // 移除日期關鍵字以免干擾後續識別
+      cleanText = cleanText.replace(/明天|後天|今天/g, '');
 
       // 2. 識別客戶 (暴力搜尋 + 最長匹配優先)
       let matchedCustomerId = '';
@@ -269,6 +280,9 @@ export const useVoiceAssistant = ({
       // 我們使用一個 processingText 來進行後續的產品識別，以免修改原始 transcript 影響除錯
       // 這裡直接使用 normalizedTranscript，因為產品識別也需要正規化
       let processingText = normalizedTranscript;
+      
+      // 移除日期關鍵字
+      processingText = processingText.replace(/明天|後天|今天/g, '');
 
       // 如果有識別到客戶，先從 processingText 中移除
       if (matchedCustomerName) {
@@ -382,6 +396,7 @@ export const useVoiceAssistant = ({
           matchedCustomerId,
           matchedCustomerName,
           items: identifiedItems,
+          relativeDay,
           globalNote: remainingNote
       };
   };
@@ -398,7 +413,18 @@ export const useVoiceAssistant = ({
           result = await processWithRules(transcript);
       }
 
-      const { matchedCustomerId, matchedCustomerName, items, globalNote } = result;
+      const { matchedCustomerId, matchedCustomerName, items, relativeDay, globalNote } = result;
+
+      // Calculate Target Date
+      const today = new Date();
+      today.setDate(today.getDate() + (relativeDay || 0)); // Default to today (0)
+      const targetDateStr = formatDateStr(today);
+      
+      // Update selected date if different
+      if (targetDateStr !== selectedDate) {
+          setSelectedDate(targetDateStr);
+          addToast(`已切換至 ${targetDateStr}`, 'info');
+      }
 
       // Populate Form
       const newItems: OrderItem[] = items.length > 0 
