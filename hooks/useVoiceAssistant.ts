@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { Customer, Product, OrderItem, ToastType } from '../types';
-import { formatDateStr, formatTimeForInput } from '../utils';
+import { formatDateStr } from '../utils';
 
 interface UseVoiceAssistantProps {
   customers: Customer[];
@@ -15,6 +14,30 @@ interface UseVoiceAssistantProps {
   handleSelectExistingCustomer: (id: string) => void;
   addToast: (msg: string, type: ToastType) => void;
 }
+
+// Step 1: 同義詞字典
+const PRODUCT_ALIASES: Record<string, string[]> = {
+  '油麵': ['黃麵', '切仔麵', '油面', '黃面'],
+  '陽春麵': ['白麵', '扁麵', '陽春面', '白面'],
+  '意麵': ['鹽水意麵', '乾意麵', '意面'],
+  '拉麵': ['細拉麵', '粗拉麵', '拉面'],
+  '米粉': ['炊粉', '新竹米粉'],
+  '冬粉': ['粉絲', '冬粉'],
+  '板條': ['粿仔', '粄條', '粿仔條'],
+  '水餃皮': ['餃子皮'],
+  '餛飩皮': ['雲吞皮', '扁食皮'],
+};
+
+// 中文數字轉換
+const parseChineseNumber = (str: string): number => {
+  const map: Record<string, number> = {
+    '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4, '五': 5,
+    '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '半': 0.5
+  };
+  if (map[str]) return map[str];
+  const num = parseFloat(str);
+  return isNaN(num) ? 1 : num;
+};
 
 export const useVoiceAssistant = ({
   customers,
@@ -48,116 +71,116 @@ export const useVoiceAssistant = ({
     setIsProcessingVoice(true);
 
     try {
-      const realTodayDate = formatDateStr(new Date());
-      const currentViewDate = selectedDate || realTodayDate;
-      const simpleCustomers = customers.map(c => ({ id: c.id, name: c.name }));
-      const simpleProducts = products.map(p => ({ id: p.id, name: p.name, category: p.category }));
-
-      // Prompt Engineering
-      const prompt = `
-        你是一個專業的訂單管理 AI 助手。
-
-        系統基準資訊：
-        1. 真實今天 (Real Today): ${realTodayDate} (以此日期計算「明天」、「後天」、「下週一」等相對日期)。
-        2. 使用者當前畫面 (Current View): ${currentViewDate} (如果使用者完全沒有提到日期，請將訂單歸類到此日期)。
-
-        任務：將使用者的語音文字轉換為 JSON 格式。
-
-        已知客戶列表：
-        ${JSON.stringify(simpleCustomers)}
-
-        已知產品列表：
-        ${JSON.stringify(simpleProducts)}
-
-        使用者說：
-        "${transcript}"
-
-        規則：
-        1. 日期計算邏輯 (重要)：
-           - 如果使用者說了相對時間（如「明天」、「下週一」），請務必以 [真實今天 ${realTodayDate}] 為基準進行計算。
-           - 如果使用者完全沒有提到時間，請將訂單歸類到 [使用者當前畫面 ${currentViewDate}] 的日期。
-        2. 客戶名稱與產品名稱請進行模糊比對，回傳對應的 ID。
-        3. 如果找不到對應客戶或產品，ID 留空，將文字放入 Note。
-        4. 數量請統一轉換為數字。
-        
-        Config: Use schema for output.
-      `;
-
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              customerName: { type: Type.STRING },
-              customerId: { type: Type.STRING },
-              deliveryDate: { type: Type.STRING },
-              items: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    productId: { type: Type.STRING },
-                    quantity: { type: Type.NUMBER },
-                    unit: { type: Type.STRING }
-                  }
-                }
-              },
-              note: { type: Type.STRING }
-            }
-          }
+      // 1. 預處理：移除無意義的語助詞
+      let cleanText = transcript.replace(/那個|然後|幫我|一下|麻煩|請/g, '');
+      
+      // 2. 識別客戶
+      let matchedCustomerId = '';
+      let matchedCustomerName = '';
+      
+      // 簡單模糊比對客戶名稱
+      for (const customer of customers) {
+        if (cleanText.includes(customer.name)) {
+          matchedCustomerId = customer.id;
+          matchedCustomerName = customer.name;
+          // 移除已識別的客戶名稱，避免干擾後續解析
+          cleanText = cleanText.replace(customer.name, '');
+          break;
         }
-      });
+      }
 
-      const jsonText = response.text;
-      if (!jsonText) throw new Error("Empty response from AI");
-      const result = JSON.parse(jsonText);
+      // 3. 識別品項 (使用同義詞與模糊比對)
+      const identifiedItems: any[] = [];
+      
+      // 依產品名稱長度排序，優先匹配較長的名稱，避免誤判 (例如 "油麵(大)" 優先於 "油麵")
+      const sortedProducts = [...products].sort((a, b) => b.name.length - a.name.length);
+      
+      for (const p of sortedProducts) {
+         const aliases = PRODUCT_ALIASES[p.name] || [];
+         // 加上產品名稱本身，並過濾掉空字串
+         const keywords = [p.name, ...aliases].filter(Boolean);
+         
+         // 檢查 transcript 是否包含關鍵字
+         const match = keywords.find(k => cleanText.includes(k));
+         
+         if (match) {
+            // 4. 解析數量 (尋找關鍵字附近的數字)
+            // Regex 解釋:
+            // 匹配關鍵字後面的內容
+            // (\d+|半|一|兩|二|三|四|五|六|七|八|九|十) -> 捕捉數字或中文數字
+            // (.*?) -> 非貪婪匹配中間的字 (可能是空白或其他字)
+            // (斤|包|袋|公斤|kg|g|台斤|個|顆|粒) -> 捕捉單位
+            const qtyRegex = new RegExp(`${match}.*?(\\d+|半|一|兩|二|三|四|五|六|七|八|九|十)(.*?)(斤|包|袋|公斤|kg|g|台斤|個|顆|粒)`, 'i');
+            const qtyMatch = cleanText.match(qtyRegex);
+            
+            let quantity = 10; // 預設
+            let unit = '斤';
+            let note = '';
+            
+            if (qtyMatch) {
+               quantity = parseChineseNumber(qtyMatch[1]); 
+               unit = qtyMatch[3];
+               
+               // 移除已識別的部分 (關鍵字 + 數量 + 單位)
+               // 這裡比較粗略，直接把匹配到的整段移除
+               cleanText = cleanText.replace(qtyMatch[0], '');
+            } else {
+               // 如果只有品項沒有數量，預設 10 斤，並只移除品項名稱
+               cleanText = cleanText.replace(match, '');
+            }
+            
+            identifiedItems.push({ productId: p.id, quantity, unit, note });
+         }
+      }
+
+      // 5. 提取備註 (移除已識別的品項和數量，剩下的就是備註)
+      // 清理剩餘文字中的標點符號和多餘空白
+      let remainingNote = cleanText.replace(/[，。、,.]/g, ' ').trim();
+      
+      // 如果有識別到品項，將剩餘文字作為第一個品項的備註 (或是全域備註)
+      // 這裡簡單處理：如果有剩餘文字，且長度大於 1 (避免只剩一個字)，就當作備註
+      if (remainingNote.length > 1 && identifiedItems.length > 0) {
+          identifiedItems[0].note = remainingNote;
+      }
 
       // Populate Form
-      const newItems: OrderItem[] = (result.items || []).map((i: any) => ({
-        productId: i.productId || '',
-        quantity: i.quantity || 0,
-        unit: i.unit || '斤'
-      }));
+      const newItems: OrderItem[] = identifiedItems.length > 0 
+        ? identifiedItems.map(i => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            unit: i.unit
+          }))
+        : [{ productId: '', quantity: 10, unit: '斤' }];
 
       // Find Customer Delivery Method if ID matched
       let deliveryMethod = '';
       let deliveryTime = '08:00';
       
-      if (result.customerId) {
-        const c = customers.find(x => x.id === result.customerId);
+      if (matchedCustomerId) {
+        const c = customers.find(x => x.id === matchedCustomerId);
         if (c) {
           deliveryMethod = c.deliveryMethod || '';
-          deliveryTime = formatTimeForInput(c.deliveryTime);
+          deliveryTime = c.deliveryTime || '08:00';
         }
       }
 
-      setOrderForm(prev => ({
+      setOrderForm((prev: any) => ({
         ...prev,
-        customerType: 'existing', // Default to existing
-        customerName: result.customerName || transcript.substring(0, 10), // Fallback name
-        customerId: result.customerId || '',
+        customerType: 'existing',
+        customerName: matchedCustomerName || transcript.substring(0, 10),
+        customerId: matchedCustomerId || '',
         deliveryTime: deliveryTime,
         deliveryMethod: deliveryMethod,
-        items: newItems.length > 0 ? newItems : [{ productId: '', quantity: 10, unit: '斤' }],
-        note: result.note || ''
+        items: newItems,
+        note: remainingNote // 將剩餘文字也放入全域備註，以防萬一
       }));
-
-      // Update Date if AI parsed a different date
-      if (result.deliveryDate && result.deliveryDate !== selectedDate) {
-        setSelectedDate(result.deliveryDate);
-        addToast(`已切換至 ${result.deliveryDate}`, 'info');
-      }
 
       // Open Editor
       setEditingOrderId(null);
       setIsAddingOrder(true);
       
       // UX: If customer not found, open picker automatically after a short delay
-      if (!result.customerId) {
+      if (!matchedCustomerId) {
          setTimeout(() => {
             setCustomerPickerConfig({
                isOpen: true,
@@ -166,30 +189,17 @@ export const useVoiceAssistant = ({
             addToast('AI 未能確定店家，請手動選擇', 'info');
          }, 500);
       } else {
-         addToast('AI 解析成功！請確認內容', 'success');
+         addToast('語音解析成功！請確認內容', 'success');
       }
 
     } catch (e: any) {
-      console.error("AI Error:", e);
-      let errorMessage = 'AI 解析失敗，請手動輸入';
-      
-      const errorStr = e.toString().toLowerCase();
-
-      // 詳細錯誤分類 logic
-      if (errorStr.includes('401') || errorStr.includes('403') || errorStr.includes('key')) {
-         errorMessage = '系統設定異常 (API Key)';
-      } else if (errorStr.includes('empty response')) {
-         errorMessage = '抱歉，沒聽清楚，請再試一次';
-      } else if (errorStr.includes('fetch') || errorStr.includes('network') || errorStr.includes('offline')) {
-         errorMessage = '網路連線不穩';
-      }
-
-      addToast(errorMessage, 'error');
+      console.error("Voice Processing Error:", e);
+      addToast('解析失敗，請手動輸入', 'error');
       
       // Still open the form but empty
       setEditingOrderId(null);
       setIsAddingOrder(true);
-      setOrderForm(prev => ({ ...prev, note: `語音轉錄: ${transcript}` }));
+      setOrderForm((prev: any) => ({ ...prev, note: `語音轉錄: ${transcript}` }));
     } finally {
       setIsProcessingVoice(false);
     }
