@@ -66,10 +66,37 @@ export const useOrderActions = ({
 
   const findLastOrder = (customerId: string, customerName: string) => {
     const customerOrders = orders.filter(o => o.customerName === customerName || customers.find(c => c.id === customerId)?.name === o.customerName);
+    
+    // 1. Calculate same day last week
+    const currentDay = new Date(selectedDate);
+    const lastWeekDate = new Date(currentDay);
+    lastWeekDate.setDate(currentDay.getDate() - 7);
+    // Helper to format date as YYYY-MM-DD manually since we don't have formatDateStr imported here (it's in utils but let's be safe)
+    // Actually formatDateStr is imported in utils.ts, let's assume we can use a local helper or just standard ISO string slice
+    const lastWeekDateStr = lastWeekDate.toISOString().split('T')[0]; 
+
+    // 2. Try to find order from same day last week
+    const sameDayLastWeekOrder = customerOrders.find(o => o.deliveryDate === lastWeekDateStr);
+
+    if (sameDayLastWeekOrder && sameDayLastWeekOrder.items.length > 0) {
+       setLastOrderCandidate({ 
+         date: sameDayLastWeekOrder.deliveryDate, 
+         items: sameDayLastWeekOrder.items.map(i => ({...i})),
+         sourceLabel: '上週同日' 
+       });
+       return;
+    }
+
+    // 3. Fallback: Find most recent order (excluding today)
     const sorted = customerOrders.sort((a, b) => new Date(b.deliveryDate).getTime() - new Date(a.deliveryDate).getTime());
     const last = sorted.find(o => o.deliveryDate !== selectedDate);
+    
     if (last && last.items.length > 0) {
-      setLastOrderCandidate({ date: last.deliveryDate, items: last.items.map(i => ({...i})) });
+      setLastOrderCandidate({ 
+        date: last.deliveryDate, 
+        items: last.items.map(i => ({...i})),
+        sourceLabel: '最近一次'
+      });
     } else {
       setLastOrderCandidate(null);
     }
@@ -79,7 +106,7 @@ export const useOrderActions = ({
     if (!lastOrderCandidate) return;
     setOrderForm((prev: any) => ({ ...prev, items: lastOrderCandidate.items.map((i: any) => ({...i})) }));
     setLastOrderCandidate(null);
-    addToast('已帶入上次訂單內容', 'success');
+    addToast(`已帶入${lastOrderCandidate.sourceLabel || '上次'}訂單內容`, 'success');
   };
 
   const handleSelectExistingCustomer = (id: string) => {
