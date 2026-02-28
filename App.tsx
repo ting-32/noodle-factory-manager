@@ -251,6 +251,94 @@ const App: React.FC = () => {
 
   // ... (Callbacks and Effects remain unchanged until handleSaveOrder) ...
 
+  // NEW: History Stack Management for Android Back Button
+  useEffect(() => {
+    // 1. Push initial state to prevent immediate exit on first back press
+    window.history.pushState(null, document.title, window.location.href);
+
+    const handlePopState = (event: PopStateEvent) => {
+      // Priority 1: Close Modals
+      if (isAddingOrder) {
+        setIsAddingOrder(false);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (editingOrderId) {
+        setEditingOrderId(null);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (isEditingCustomer) {
+        setIsEditingCustomer(null);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (isEditingProduct) {
+        setIsEditingProduct(null);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (isSettingsOpen) {
+        setIsSettingsOpen(false);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (isDatePickerOpen) {
+        setIsDatePickerOpen(false);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (pickerConfig.isOpen) {
+        setPickerConfig(prev => ({ ...prev, isOpen: false }));
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (customerPickerConfig.isOpen) {
+        setCustomerPickerConfig(prev => ({ ...prev, isOpen: false }));
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (quickAddData) {
+        setQuickAddData(null);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+      if (expandedCustomer) {
+        setExpandedCustomer(null);
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+
+      // Priority 2: Navigate Tabs
+      if (activeTab !== 'orders') {
+        setActiveTab('orders');
+        window.history.pushState(null, document.title, window.location.href); // Restore stack
+        return;
+      }
+
+      // Priority 3: Allow Exit (No pushState here)
+      // If we are at 'orders' tab and no modals are open, allow the browser to go back (exit app or prev page)
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [
+    isAddingOrder, 
+    editingOrderId, 
+    isEditingCustomer, 
+    isEditingProduct, 
+    isSettingsOpen, 
+    isDatePickerOpen, 
+    pickerConfig.isOpen, 
+    customerPickerConfig.isOpen, 
+    quickAddData, 
+    expandedCustomer, 
+    activeTab
+  ]);
+
   useEffect(() => {
     setIsSelectionMode(false);
     setSelectedOrderIds(new Set());
@@ -454,7 +542,84 @@ const App: React.FC = () => {
     setConfirmConfig
   });
 
-  const handlePrint = () => { if (workSheetData.length === 0) { addToast('目前沒有資料可供匯出', 'info'); return; } const printWindow = window.open('', '_blank'); if (!printWindow) { addToast('彈跳視窗被封鎖，無法開啟列印頁面', 'error'); window.print(); return; } const sortedDates = [...workDates].sort(); const dateRangeDisplay = sortedDates.length > 1 ? `${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]} (${sortedDates.length}天)` : sortedDates[0]; let htmlContent = `<!DOCTYPE html><html><head><title>麵廠職人 - 生產總表</title><style>body { font-family: sans-serif; padding: 20px; color: #333; } h1 { text-align: center; margin-bottom: 10px; font-size: 32px; } p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 20px; font-weight: bold; } table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; } th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; } th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 20px; } tr:nth-child(even) { background-color: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .text-right { text-align: right; } .text-center { text-align: center; } .badge { display: inline-block; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 16px; margin: 4px; border: 1px solid #ddd; color: #555; } .total-cell { font-size: 24px; font-weight: bold; } .footer { margin-top: 40px; text-align: right; font-size: 14px; color: #999; border-top: 1px solid #eee; padding-top: 10px; } </style></head><body><h1>生產總表</h1><p class="date">出貨日期: ${dateRangeDisplay}</p>`; workSheetData.forEach(group => { htmlContent += `<div style="page-break-inside: avoid;"><div class="group-header" style="background-color: ${group.color}40; border-left: 8px solid ${group.color};"> ${group.label} (共 ${group.totalWeight} 單位)</div><table><thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead><tbody>${group.items.map(item => `<tr><td style="font-weight: bold; font-size: 22px;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center" style="font-size: 18px;">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>`).join('')}</tbody></table></div>`; }); htmlContent += `<div class="footer">列印時間: ${new Date().toLocaleString()}</div><script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script></body></html>`; printWindow.document.write(htmlContent); printWindow.document.close(); };
+  const handlePrint = () => { 
+    if (workSheetData.length === 0) { 
+      addToast('目前沒有資料可供匯出', 'info'); 
+      return; 
+    } 
+    const printWindow = window.open('', '_blank'); 
+    if (!printWindow) { 
+      addToast('彈跳視窗被封鎖，無法開啟列印頁面', 'error'); 
+      window.print(); 
+      return; 
+    } 
+    const sortedDates = [...workDates].sort(); 
+    const dateRangeDisplay = sortedDates.length > 1 ? `${sortedDates[0]} ~ ${sortedDates[sortedDates.length - 1]} (${sortedDates.length}天)` : sortedDates[0]; 
+    
+    let htmlContent = `<!DOCTYPE html>
+    <html>
+      <head>
+        <title>麵廠職人 - 生產總表</title>
+        <style>
+          body { font-family: sans-serif; padding: 20px; color: #333; } 
+          h1 { text-align: center; margin-bottom: 10px; font-size: 32px; } 
+          p.date { text-align: center; color: #666; margin-bottom: 30px; font-size: 20px; font-weight: bold; } 
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 18px; } 
+          th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; } 
+          th { background-color: #f5f5f5; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 20px; } 
+          tr:nth-child(even) { background-color: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; } 
+          .text-right { text-align: right; } 
+          .text-center { text-align: center; } 
+          .badge { display: inline-block; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 16px; margin: 4px; border: 1px solid #ddd; color: #555; } 
+          .total-cell { font-size: 24px; font-weight: bold; } 
+          .footer { margin-top: 40px; text-align: right; font-size: 14px; color: #999; border-top: 1px solid #eee; padding-top: 10px; } 
+          
+          /* 僅在螢幕上顯示，列印時隱藏 */
+          @media screen {
+            .no-print {
+              display: block;
+            }
+            .close-btn {
+              position: fixed;
+              top: 20px;
+              right: 20px;
+              background-color: #ff4444;
+              color: white;
+              border: none;
+              padding: 15px 30px;
+              font-size: 20px;
+              border-radius: 8px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+              z-index: 9999;
+              cursor: pointer;
+              font-weight: bold;
+            }
+          }
+          @media print {
+            .no-print {
+              display: none !important;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <!-- 新增這行 -->
+        <button class="no-print close-btn" onclick="window.close(); if(!window.closed){window.history.back();}">
+          ╳ 關閉 / 返回
+        </button>
+        
+        <h1>生產總表</h1>
+        <p class="date">出貨日期: ${dateRangeDisplay}</p>`; 
+        
+    workSheetData.forEach(group => { 
+      htmlContent += `<div style="page-break-inside: avoid;"><div class="group-header" style="background-color: ${group.color}40; border-left: 8px solid ${group.color};"> ${group.label} (共 ${group.totalWeight} 單位)</div><table><thead><tr><th width="20%">品項</th><th width="15%">總量</th><th width="10%">單位</th><th>分配明細</th></tr></thead><tbody>${group.items.map(item => `<tr><td style="font-weight: bold; font-size: 22px;">${item.name}</td><td class="text-right total-cell">${item.totalQty}</td><td class="text-center" style="font-size: 18px;">${item.unit}</td><td>${item.details.map(d => `<span class="badge">${d.customerName} <b>${d.qty}</b></span>`).join('')}</td></tr>`).join('')}</tbody></table></div>`; 
+    }); 
+    
+    htmlContent += `<div class="footer">列印時間: ${new Date().toLocaleString()}</div><script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script></body></html>`; 
+    
+    printWindow.document.write(htmlContent); 
+    printWindow.document.close(); 
+  };
 
   if (!isAuthenticated) return <LoginScreen onLogin={handleLogin} />;
   if (isInitialLoading) return <div className="min-h-screen flex flex-col items-center justify-center bg-morandi-oatmeal p-10 text-center"><Loader2 className="w-12 h-12 text-morandi-blue animate-spin mb-6" /><h2 className="text-xl font-bold text-morandi-charcoal tracking-wide">正在同步雲端資料...</h2></div>;
