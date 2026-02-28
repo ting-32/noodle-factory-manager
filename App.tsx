@@ -497,7 +497,9 @@ const App: React.FC = () => {
     setIsVoiceModalOpen,
     isProcessingVoice,
     voiceLoadingText,
-    handleProcessVoiceOrder
+    handleProcessVoiceOrder,
+    isAiMode,
+    setIsAiMode
   } = useVoiceAssistant({
     customers,
     products,
@@ -714,6 +716,8 @@ const App: React.FC = () => {
         isOpen={isVoiceModalOpen}
         onClose={() => setIsVoiceModalOpen(false)}
         onTranscriptComplete={handleProcessVoiceOrder}
+        isAiMode={isAiMode}
+        onToggleAiMode={setIsAiMode}
       />
 
       {/* --- Global Loading Overlay for Voice Processing --- */}
