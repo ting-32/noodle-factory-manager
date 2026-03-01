@@ -57,7 +57,9 @@ import {
   RotateCcw, 
   ArrowRight,
   Mic, // New Import
-  StopCircle // New Import
+  StopCircle, // New Import
+  List,
+  Grid
 } from 'lucide-react';
 import { motion, AnimatePresence, Variants, Reorder, useDragControls, useMotionValue, useTransform, PanInfo } from 'framer-motion';
 import { Customer, Product, Order, OrderStatus, OrderItem, GASResponse, DefaultItem, CustomerPrice, Toast, ToastType } from './types';
@@ -76,6 +78,7 @@ import { ToastNotification } from './components/ToastNotification';
 import { NavItem } from './components/NavItem';
 import { SortableProductItem } from './components/SortableProductItem';
 import { SwipeableOrderCard } from './components/SwipeableOrderCard';
+import { GridCard } from './components/GridCard';
 import { ScheduleOrderCard } from './components/ScheduleOrderCard';
 import { useDataSync } from './hooks/useDataSync';
 import { useOrderCalculations } from './hooks/useOrderCalculations';
@@ -244,6 +247,9 @@ const App: React.FC = () => {
   const [productForm, setProductForm] = useState<Partial<Product>>({});
   const [customerSearch, setCustomerSearch] = useState('');
   
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [selectedCustomerForModal, setSelectedCustomerForModal] = useState<string | null>(null);
+  
   const [initialProductOrder, setInitialProductOrder] = useState<string[]>([]);
   const [hasReorderedProducts, setHasReorderedProducts] = useState(false);
 
@@ -362,6 +368,10 @@ const App: React.FC = () => {
   // NEW: Effect for dynamic loading text
   // (Moved to useVoiceAssistant)
 
+  const handleGridCardClick = useCallback((custName: string) => {
+    setSelectedCustomerForModal(custName);
+  }, []);
+
   // ... (Computed values moved to useOrderCalculations) ...
   const {
     orderSummary,
@@ -372,6 +382,7 @@ const App: React.FC = () => {
     financeData,
     settlementPreview,
     groupedOrders,
+    dayOrders,
     filteredCustomers,
     workSheetData
   } = useOrderCalculations({
@@ -805,11 +816,45 @@ const App: React.FC = () => {
                   })}
                </div>
             </div>
-            {/* ... (Orders List - same logic as before but using toast handlers) */}
+             {/* ... (Orders List - same logic as before but using toast handlers) */}
              <div className="space-y-3">
-              <h2 className="text-sm font-bold text-morandi-pebble px-2 flex items-center gap-2 uppercase tracking-widest mb-2"><Layers className="w-4 h-4" /> 配送列表 [{selectedDate}] ({Object.keys(groupedOrders).length} 家)</h2>
-              <motion.div variants={containerVariants} initial="hidden" animate="show">
-              {Object.keys(groupedOrders).length > 0 ? (
+              <div className="flex items-center justify-between px-2 mb-2">
+                <h2 className="text-sm font-bold text-morandi-pebble flex items-center gap-2 uppercase tracking-widest"><Layers className="w-4 h-4" /> 配送列表 [{selectedDate}] ({Object.keys(groupedOrders).length} 家)</h2>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+                  <button 
+                    onClick={() => setViewMode('list')}
+                    className={`p-1.5 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('grid')}
+                    className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <Grid className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <motion.div variants={containerVariants} initial="hidden" animate="show" className={viewMode === 'grid' ? "grid grid-cols-4 gap-1.5 p-1" : ""}>
+              {viewMode === 'grid' ? (
+                Object.keys(groupedOrders).length > 0 ? (
+                  Object.entries(groupedOrders as Record<string, Order[]>).map(([custName, custOrders]) => (
+                    <GridCard 
+                      key={custName} 
+                      customerName={custName}
+                      orders={custOrders} 
+                      products={products}
+                      customers={customers}
+                      onClick={handleGridCardClick} 
+                    />
+                  ))
+                ) : (
+                  <div className="col-span-4 text-center py-10">
+                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3"><Package className="w-8 h-8 text-slate-300" /></div>
+                    <p className="text-slate-400 font-medium">尚無訂單</p>
+                  </div>
+                )
+              ) : Object.keys(groupedOrders).length > 0 ? (
                 Object.entries(groupedOrders as Record<string, Order[]>).map(([custName, custOrders]) => {
                   const isExpanded = expandedCustomer === custName;
                   const currentCustomer = customers.find(c => c.name === custName);
@@ -1244,6 +1289,85 @@ const App: React.FC = () => {
            </div>
            </motion.div>
          </div>
+      )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+      {selectedCustomerForModal && groupedOrders[selectedCustomerForModal] && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setSelectedCustomerForModal(null)}>
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }} 
+            animate={{ opacity: 1, scale: 1 }} 
+            exit={{ opacity: 0, scale: 0.95 }} 
+            className="w-full max-w-sm max-h-[90vh] overflow-y-auto" 
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="space-y-3">
+              {groupedOrders[selectedCustomerForModal].map(order => (
+                <SwipeableOrderCard 
+                  key={order.id}
+                  order={order} 
+                  products={products} 
+                  customers={customers}
+                  isSelectionMode={false}
+                  isSelected={false}
+                  onToggleSelection={() => {}}
+                  onStatusChange={handleSwipeStatusChange}
+                  onDelete={() => {
+                    handleDeleteOrder(order.id);
+                    if (groupedOrders[selectedCustomerForModal].length <= 1) {
+                      setSelectedCustomerForModal(null);
+                    }
+                  }}
+                  onShare={handleShareOrder}
+                  onMap={openGoogleMaps}
+                  onEdit={(orderToEdit) => {
+                    handleEditOrder(orderToEdit);
+                    setSelectedCustomerForModal(null);
+                  }}
+                  onRetry={handleRetryOrder}
+                />
+              ))}
+            </div>
+            <div className="bg-white rounded-[24px] p-4 mt-2 shadow-sm">
+              <motion.button 
+                whileTap={buttonTap} 
+                onClick={() => {
+                  setQuickAddData({ customerName: selectedCustomerForModal, items: [{productId: '', quantity: 10, unit: '斤'}] });
+                  setSelectedCustomerForModal(null);
+                }} 
+                className="w-full mb-2 py-3 rounded-[16px] border-2 border-dashed border-morandi-blue/30 text-morandi-blue font-bold text-sm flex items-center justify-center gap-2 hover:bg-morandi-blue/5 transition-colors tracking-wide"
+              >
+                <Plus className="w-4 h-4" /> 追加訂單
+              </motion.button>
+              <div className="flex gap-2">
+                <motion.button 
+                  whileTap={buttonTap} 
+                  onClick={() => {
+                    handleCopyOrder(selectedCustomerForModal, groupedOrders[selectedCustomerForModal]);
+                    setSelectedCustomerForModal(null);
+                  }} 
+                  className="flex-1 py-3 px-4 rounded-[16px] bg-slate-50 text-morandi-pebble border border-slate-200 font-bold text-sm flex items-center justify-center gap-2 hover:bg-slate-100 transition-colors shadow-sm tracking-wide"
+                >
+                  <Copy className="w-4 h-4" /> 複製
+                </motion.button>
+                <motion.button 
+                  whileTap={buttonTap} 
+                  onClick={() => {
+                    openGoogleMaps(selectedCustomerForModal);
+                    setSelectedCustomerForModal(null);
+                  }} 
+                  className="flex-1 py-3 px-4 rounded-[16px] bg-morandi-blue text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-slate-600 transition-colors shadow-lg shadow-morandi-blue/20 tracking-wide"
+                >
+                  <MapPin className="w-4 h-4" /> 導航
+                </motion.button>
+              </div>
+            </div>
+            <button onClick={() => setSelectedCustomerForModal(null)} className="mt-4 w-full bg-white py-3 rounded-[16px] font-bold text-slate-700 shadow-sm active:bg-slate-50 transition-colors">
+              關閉
+            </button>
+          </motion.div>
+        </div>
       )}
       </AnimatePresence>
 
