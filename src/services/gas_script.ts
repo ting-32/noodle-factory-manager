@@ -107,7 +107,7 @@ function doPost(e) {
         break;
       case "updateOrderContent":
         result = updateOrderContent(params.data);
-        writeSystemLog("UPDATE_ORDER", params.data.customerName || "未知", JSON.stringify({ id: params.data.id, customerName: params.data.customerName, _diff: params.data._diff || {} }));
+        writeSystemLog("UPDATE_ORDER", params.data.customerName || "未知", JSON.stringify({ diff: params.data }));
         break;
       case "updateOrderStatus":
         result = updateOrderStatus(params.data);
@@ -115,7 +115,7 @@ function doPost(e) {
         break;
       case "batchUpdateOrders":
         result = batchUpdateOrders(params.data);
-        writeSystemLog("UPDATE_ORDER_BATCH", "多筆訂單", JSON.stringify({ updates: params.data.updates || params.data }));
+        writeSystemLog("UPDATE_ORDER_BATCH", "多筆訂單", JSON.stringify({ updates: params.data }));
         break;
       case "batchUpdatePaymentStatus":
         result = batchUpdatePaymentStatus(params.data);
@@ -123,7 +123,7 @@ function doPost(e) {
         break;
       case "deleteOrder":
         result = deleteOrder(params.data);
-        writeSystemLog("DELETE_ORDER", params.data.customerName || `Order ID: ${params.data.id || "未知"}`, JSON.stringify({ deletedId: params.data.id, customerName: params.data.customerName }));
+        writeSystemLog("DELETE_ORDER", `Order ID: ${params.data.id || "未知"}`, JSON.stringify({ deletedId: params.data.id }));
         break;
       case "reorderProducts":
         result = reorderProducts(params.data);
@@ -133,10 +133,28 @@ function doPost(e) {
         result = updateCustomer(params.data);
         writeSystemLog("UPDATE_CUSTOMER", params.data.name || "未知", JSON.stringify({ data: params.data }));
         break;
-      case "deleteCustomer":
-        result = deleteCustomer(params.data);
-        writeSystemLog("DELETE_CUSTOMER", `Customer ID: ${params.data.id || "未知"}`, JSON.stringify({ deletedId: params.data.id }));
-        break;
+            case "deleteCustomer":
+        var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Customers");
+        if (!sheet) {
+          return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "找不到工作表" })).setMimeType(ContentService.MimeType.JSON);
+        }
+        var targetId = params.data.id;
+        var sheetData = sheet.getDataRange().getValues();
+        var deleted = false;
+        for (var i = 1; i < sheetData.length; i++) {
+          if (String(sheetData[i][0]) === String(targetId)) {
+            sheet.deleteRow(i + 1);
+            deleted = true;
+            break;
+          }
+        }
+        if (deleted) {
+          try { CacheService.getScriptCache().remove("APP_CACHE_CPT"); } catch (err) {}
+          writeSystemLog("DELETE_CUSTOMER", "Customer ID: " + (targetId || "未知"), JSON.stringify({ deletedId: targetId }));
+          return ContentService.createTextOutput(JSON.stringify({ success: true, status: "success" })).setMimeType(ContentService.MimeType.JSON);
+        } else {
+          return ContentService.createTextOutput(JSON.stringify({ success: false, status: "error", message: "找不到該店家" })).setMimeType(ContentService.MimeType.JSON);
+        }
       case "updateProduct":
         result = updateProduct(params.data);
         writeSystemLog("UPDATE_PRODUCT", params.data.name || "未知", JSON.stringify({ data: params.data }));
@@ -229,7 +247,7 @@ function checkUpdates() {
     if (lastUpdatedColIdx !== -1 && sheet.getLastRow() > 1) {
       const values = sheet.getRange(2, lastUpdatedColIdx + 1, sheet.getLastRow() - 1, 1).getValues();
       for (let i = 0; i < values.length; i++) {
-        const ts = new Date(values[i][0]).getTime();
+        const ts = parseLastUpdated(values[i][0]);
         if (ts && ts > maxTs) maxTs = ts;
       }
     }
@@ -271,7 +289,7 @@ function getOrder(data) {
     note: firstRow.Note || firstRow.note || firstRow.備註,
     status: firstRow.Status || firstRow.status || firstRow.狀態,
     deliveryMethod: firstRow.DeliveryMethod || firstRow.deliveryMethod || firstRow.配送方式,
-    lastUpdated: firstRow.LastUpdated ? new Date(firstRow.LastUpdated).getTime() : 0,
+    lastUpdated: parseLastUpdated(firstRow.LastUpdated),
     trip: firstRow.Trip || firstRow.trip || firstRow.趟次 || '',
     items: orderRows.map(r => ({
       productId: r.ProductName || r.productName || r.品項,
@@ -342,6 +360,14 @@ function getSheetData(sheet) {
   return data;
 }
 
+function parseLastUpdated(val) {
+  if (!val) return 0;
+  var num = Number(val);
+  if (!isNaN(num) && num > 100000000) return num;
+  var d = new Date(val).getTime();
+  return isNaN(d) ? 0 : d;
+}
+
 function getData(startDateStr, since = 0) {
   const sheets = getSheets();
   const cache = CacheService.getScriptCache();
@@ -400,7 +426,7 @@ function getData(startDateStr, since = 0) {
           paymentTerm: c.PaymentTerm || c.paymentTerm || c.付款週期,
           defaultTrip: c.DefaultTrip || c.defaultTrip || c.預設趟數,
           autoOrderEnabled: String(c.自動建單開關).trim().toLowerCase() === 'true' || c.自動建單開關 === true,
-          lastUpdated: c.LastUpdated ? new Date(c.LastUpdated).getTime() : 0
+          lastUpdated: parseLastUpdated(c.LastUpdated)
         }));
 
         products = parseBatch(res.valueRanges[1], p => ({
@@ -409,7 +435,7 @@ function getData(startDateStr, since = 0) {
           unit: p.Unit || p.unit || p.單位,
           price: p.Price || p.price || p.單價,
           category: p.Category || p.category || p.分類,
-          lastUpdated: p.LastUpdated ? new Date(p.LastUpdated).getTime() : 0
+          lastUpdated: parseLastUpdated(p.LastUpdated)
         }));
 
         const values = res.valueRanges[2].values || [];
@@ -436,7 +462,7 @@ function getData(startDateStr, since = 0) {
         paymentTerm: c.PaymentTerm || c.paymentTerm || c.付款週期,
         defaultTrip: c.DefaultTrip || c.defaultTrip || c.預設趟數,
         autoOrderEnabled: String(c.自動建單開關).trim().toLowerCase() === 'true' || c.自動建單開關 === true,
-        lastUpdated: c.LastUpdated ? new Date(c.LastUpdated).getTime() : 0
+        lastUpdated: parseLastUpdated(c.LastUpdated)
       }));
 
       products = getSheetData(sheets.PRODUCTS).map(p => ({
@@ -445,7 +471,7 @@ function getData(startDateStr, since = 0) {
         unit: p.Unit || p.unit || p.單位,
         price: p.Price || p.price || p.單價,
         category: p.Category || p.category || p.分類,
-        lastUpdated: p.LastUpdated ? new Date(p.LastUpdated).getTime() : 0
+        lastUpdated: parseLastUpdated(p.LastUpdated)
       }));
 
       const getTripsData = (sheet) => {
@@ -481,7 +507,7 @@ function getData(startDateStr, since = 0) {
     status: String(o.Status || o.status || o.狀態 || '').trim(),
     deliveryMethod: o.DeliveryMethod || o.deliveryMethod || o.配送方式,
     source: o.Source || o.source || o.資料來源 || '',
-    lastUpdated: o.LastUpdated ? new Date(o.LastUpdated).getTime() : 0,
+    lastUpdated: parseLastUpdated(o.LastUpdated),
     trip: o.Trip || o.trip || o.趟次 || ''
   }));
 
@@ -499,6 +525,9 @@ function getData(startDateStr, since = 0) {
     });
   }
 
+  // 把目前試算表有效存活的訂單 ID 給提取出來 (只有增量同步需帶這包資料，以節省頻寬)
+  const allActiveOrderIds = (since > 0) ? orders.map(o => String(o.id || "")).filter(id => id !== "") : [];
+
   if (since > 0) {
     orders = orders.filter(o => o.lastUpdated > since);
   }
@@ -514,7 +543,7 @@ function getData(startDateStr, since = 0) {
   if (!settings) settings = {};
   settings.rules = getRemindRulesFromSheet();
 
-  return { customers, products, orders, trips, settings, serverGlobalTs: new Date().getTime() };
+  return { customers, products, orders, trips, settings, allActiveOrderIds, serverGlobalTs: new Date().getTime() };
 }
 
 function getRemindRulesSheet() {
@@ -1320,6 +1349,9 @@ function generateTomorrowDefaultOrders() {
   } finally {
     SpreadsheetApp.flush(); // 強制將快取變更寫入 Sheets，確保後續 Lock 拿到最新資料
     lock.releaseLock();
+    
+    // ▼ ▼ ▼ 補上這一行，建單完成後通知所有前端拉取資料 ▼ ▼ ▼
+    notifyFirebase(); 
   }
 }
 
