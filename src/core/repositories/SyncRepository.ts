@@ -14,6 +14,9 @@ export interface SyncDataResult {
   trips?: string[];
   serverGlobalTs?: number;
   settings?: any;
+  allActiveOrderIds?: string[];
+  latestSystemLogTs?: number;
+  latestNotifyLogTs?: number;
 }
 
 export interface ISyncRepository {

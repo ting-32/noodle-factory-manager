@@ -3,13 +3,14 @@ import { Search, RefreshCw, Activity, PlusCircle, Edit2, Trash2, Settings, Chevr
 import { SystemLog } from '../types';
 import { container } from '../core/di/AppContainer';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useLogStore } from '../store/useLogStore';
 
 interface Props {
   apiEndpoint: string;
 }
 
 export function SystemLogViewer({ apiEndpoint }: Props) {
-  const [logs, setLogs] = useState<SystemLog[]>([]);
+  const { systemLogs: logs, setSystemLogs } = useLogStore();
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   
   const [filterAction, setFilterAction] = useState<string>('ALL');
@@ -23,7 +24,7 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
     try {
       container.updateApiEndpoint(apiEndpoint);
       const fetchedLogs = await container.logRepo.getSystemLogs(200);
-      setLogs(fetchedLogs);
+      setSystemLogs(fetchedLogs, Date.now());
     } catch (e) {
       console.error("Failed to fetch logs", e);
     } finally {
@@ -32,10 +33,10 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
   };
 
   useEffect(() => {
-    if (apiEndpoint) {
+    if (apiEndpoint && logs.length === 0) {
       fetchLogs();
     }
-  }, [apiEndpoint]);
+  }, [apiEndpoint, logs.length]);
 
   const _uniqueActions = useMemo(() => {
     const actions = new Set<string>();
@@ -102,6 +103,47 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
     } catch {
       return null;
     }
+  };
+
+  const renderHumanReadableDetails = (actionType: string, parsedJson: any) => {
+    if (actionType === 'UPDATE_ORDER_BATCH' && parsedJson?.updates) {
+      return (
+        <div className="space-y-2 mt-2">
+          {/* 客戶與日期資訊 */}
+          <div className="bg-indigo-50 border border-indigo-100 p-2.5 rounded-xl text-xs flex flex-wrap gap-x-4 gap-y-1">
+             <p className="font-bold text-slate-700">店家名稱：<span className="text-indigo-700">{parsedJson.updates.customerName || '未提供'}</span></p>
+             <p className="font-bold text-slate-700">訂單日期：<span className="text-indigo-700">{parsedJson.updates.deliveryDate || '未提供'}</span></p>
+          </div>
+
+          {/* 狀態變更列表 */}
+          <div className="bg-slate-50 border border-slate-100 p-2.5 rounded-xl space-y-2">
+            {parsedJson.updates.updates?.map((update: any, idx: number) => (
+               <div key={idx} className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-200">
+                 <div>
+                   <p className="text-[10px] text-slate-400">訂單 ID</p>
+                   <p className="text-xs font-mono font-bold text-slate-600">{update.id}</p>
+                 </div>
+                 
+                 <div className="flex flex-col items-end">
+                   <p className="text-[10px] text-slate-400 mb-0.5">狀態變更</p>
+                   <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${
+                     update.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                   }`}>
+                     {update.status === 'PAID' ? '已結帳' : update.status}
+                   </span>
+                 </div>
+               </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <pre className="bg-slate-800 text-emerald-400 p-3 rounded-xl font-mono text-[10px] sm:text-xs overflow-x-auto whitespace-pre-wrap leading-relaxed shadow-inner">
+        {JSON.stringify(parsedJson, null, 2)}
+      </pre>
+    );
   };
 
   return (
@@ -208,6 +250,7 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
           </div>
         ) : (
           <div className="relative pl-6 space-y-6 before:absolute before:inset-0 before:ml-[1.4rem] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent mt-8">
+            <AnimatePresence>
             {filteredLogs.map(log => {
               const styles = getActionStyles(log.actionType);
               const isExpanded = expandedLogId === log.id;
@@ -215,9 +258,12 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
               
               return (
               <motion.div 
+                layout
                 key={log.id} 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, scale: 0.95, y: -20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
+                transition={{ type: 'spring', stiffness: 300, damping: 25 }}
                 className={`relative flex items-start group`}
               >
                 {/* Timeline dot */}
@@ -262,9 +308,7 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
                             exit={{ height: 0, opacity: 0 }}
                             className="overflow-hidden mt-2"
                           >
-                            <pre className="bg-slate-800 text-emerald-400 p-3 rounded-xl font-mono text-[10px] sm:text-xs overflow-x-auto whitespace-pre-wrap leading-relaxed shadow-inner">
-                              {JSON.stringify(parsedJson, null, 2)}
-                            </pre>
+                            {renderHumanReadableDetails(log.actionType, parsedJson)}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -277,6 +321,7 @@ export function SystemLogViewer({ apiEndpoint }: Props) {
                 </div>
               </motion.div>
             )})}
+            </AnimatePresence>
             <div className="pb-8">{/* spacer */}</div>
           </div>
         )}

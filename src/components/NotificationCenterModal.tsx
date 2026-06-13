@@ -7,6 +7,9 @@ import { NotificationLogViewer } from './NotificationLogViewer';
 import { DiagnosticFunnelModal } from './DiagnosticFunnelModal';
 import { container } from '../core/di/AppContainer';
 import { fetchWithRetry } from '../utils/fetchUtils';
+import { broadcastDataChange } from '../services/firebaseSync';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { useLogStore } from '../store/useLogStore';
 
 // 1. 取得該規則下次執行的具體 Date 物件
 function getNextRunDate(schedule: string | string[], timeToNotify: string): Date | null {
@@ -120,57 +123,50 @@ export const NotificationCenterModal: React.FC<Props> = ({
   setLineUserId,
   apiEndpoint
 }) => {
+  const { 
+    rules, 
+    lineChannelToken: storeLineChannelToken, 
+    lineUserId: storeLineUserId, 
+    hasCloudUpdate, 
+    setRules, 
+    resetCloudUpdateFlag 
+  } = useSettingsStore();
+
   const [activeTab, setActiveTab] = useState<'rules' | 'settings' | 'logs'>('rules');
-  const [rules, setRules] = useState<ReminderRule[]>([]);
   const [editingRule, setEditingRule] = useState<ReminderRule | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [hasCloudUpdate, setHasCloudUpdate] = useState(false);
+  const { setUnreadLogs } = useLogStore();
+
+  useEffect(() => {
+    if (activeTab === 'logs') {
+      setUnreadLogs(false);
+    }
+  }, [activeTab, setUnreadLogs]);
   
   const [isFunnelOpen, setIsFunnelOpen] = useState(false);
   const [isDryRunning, setIsDryRunning] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<any>(null);
   const [currentDryRunRuleId, setCurrentDryRunRuleId] = useState<string | null>(null);
 
-  const loadRulesFromStorage = () => {
-    // 💡 【新增】冷卻護盾檢查：如果距離上次編輯不到 15 秒 (15000 毫秒)，就忽略來自雲端的覆蓋
-    const lastEditTime = localStorage.getItem('rules_last_edit_time');
-    if (lastEditTime && Date.now() - parseInt(lastEditTime) < 15000) {
-      console.log('處於編輯安全冷卻期，略過外部背景覆寫');
-      return;
+  useEffect(() => {
+    if (isOpen) {
+      resetCloudUpdateFlag();
+      if (activeTab === 'logs') {
+        setUnreadLogs(false);
+      }
     }
-
-    const saved = localStorage.getItem('nm_reminder_rules');
-    if (saved) {
-      try {
-        const parsedRules = JSON.parse(saved).map((r: any) => {
-          if (typeof r.schedule === 'string') {
-            return {
-              ...r,
-              schedule: r.schedule === '每天' ? ['0', '1', '2', '3', '4', '5', '6'] : [r.schedule]
-            };
-          }
-          return r;
-        });
-        setRules(parsedRules);
-      } catch (e) {}
-    }
-  };
+  }, [isOpen, resetCloudUpdateFlag, activeTab, setUnreadLogs]);
 
   useEffect(() => {
-    loadRulesFromStorage();
-
-    // 監聽來自背景同步的更新事件
-    const handleCloudUpdate = (e: any) => {
-      if (e.detail?.isPollingUpdate) {
-          setHasCloudUpdate(true);
+    if (hasCloudUpdate) {
+      if (editingRule) {
+        // 使用者正在編輯中：靜靜等待，不改變其正在編輯的內容
       } else {
-          loadRulesFromStorage();
+        // 使用者沒有在編輯：利用 AnimatePresence 讓列表自行觸發動畫刷新
       }
-    };
-    
-    window.addEventListener('rules_updated_from_cloud', handleCloudUpdate);
-    return () => window.removeEventListener('rules_updated_from_cloud', handleCloudUpdate);
-  }, []);
+      resetCloudUpdateFlag();
+    }
+  }, [hasCloudUpdate, editingRule, resetCloudUpdateFlag]);
 
   const saveToGas = async (currentRules: ReminderRule[], channelToken: string, userId: string) => {
     if (!apiEndpoint) return;
@@ -182,6 +178,8 @@ export const NotificationCenterModal: React.FC<Props> = ({
         lineChannelToken: channelToken,
         lineUserId: userId
       });
+      // 廣播給其他裝置更新設定與規則
+      broadcastDataChange();
     } catch(e) {
       console.error(e);
     } finally {
@@ -190,11 +188,10 @@ export const NotificationCenterModal: React.FC<Props> = ({
   };
 
   const saveRules = (newRules: ReminderRule[]) => {
-    setRules(newRules);
-    localStorage.setItem('nm_reminder_rules', JSON.stringify(newRules));
-    // 💡 【新增】：打上冷卻護盾，寫入現在的絕對時間
-    localStorage.setItem('rules_last_edit_time', Date.now().toString());
-    saveToGas(newRules, lineChannelToken, lineUserId);
+    setRules(newRules); // Store 狀態改變 -> 畫面瞬間更新
+    
+    // 呼叫原本的 API 同步給 GAS
+    saveToGas(newRules, storeLineChannelToken || lineChannelToken, storeLineUserId || lineUserId);
   };
   
   const handleDryRunRule = async (ruleId: string) => {
@@ -382,24 +379,6 @@ export const NotificationCenterModal: React.FC<Props> = ({
             </button>
           </div>
           
-          {hasCloudUpdate && (
-            <div className="bg-blue-50 border-b border-blue-100 px-4 py-2.5 flex items-center justify-between shrink-0">
-              <p className="text-xs font-bold text-blue-700 flex items-center gap-1.5">
-                <RefreshCw className="w-3.5 h-3.5" />
-                有新的變更已在雲端儲存
-              </p>
-              <button 
-                onClick={() => {
-                  setHasCloudUpdate(false);
-                  loadRulesFromStorage();
-                }}
-                className="text-xs font-bold text-blue-600 hover:text-blue-800 py-1 px-2.5 bg-blue-100 rounded-lg transition-colors shadow-sm"
-              >
-                載入並覆蓋
-              </button>
-            </div>
-          )}
-
           {/* Tabs */}
           <div className="flex border-b border-slate-100 p-2 gap-2 bg-slate-50/50">
             <button
@@ -426,45 +405,57 @@ export const NotificationCenterModal: React.FC<Props> = ({
             {activeTab === 'rules' && (
               <div className="space-y-4 pb-20">
                 {editingRule ? (
-                  <RuleBuilder 
-                    rule={editingRule} 
-                    setRule={setEditingRule} 
-                    customers={customers} 
-                    products={products} 
-                    onSave={() => {
-                      const updated = rules.filter(r => r.id !== editingRule.id);
-                      saveRules([...updated, editingRule]);
-                      setEditingRule(null);
-                    }}
-                    onCancel={() => setEditingRule(null)}
-                    previewText={calculatePreview(editingRule)}
-                  />
+                  <>
+                    <RuleBuilder 
+                      rule={editingRule} 
+                      setRule={setEditingRule} 
+                      customers={customers} 
+                      products={products} 
+                      onSave={() => {
+                        const updated = rules.filter(r => r.id !== editingRule.id);
+                        saveRules([...updated, editingRule]);
+                        setEditingRule(null);
+                      }}
+                      onCancel={() => setEditingRule(null)}
+                      previewText={calculatePreview(editingRule)}
+                    />
+                  </>
                 ) : (
                   <>
-                    {rules.map(rule => (
-                      <div key={rule.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm relative overflow-hidden">
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                            <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                              {rule.name}
-                              {!rule.isActive && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">已停用</span>}
-                            </h3>
-                            <NextRunIndicator rule={rule} />
+                    <AnimatePresence mode="popLayout">
+                      {rules.map(rule => (
+                        <motion.div 
+                          layout
+                          key={rule.id}
+                          initial={{ opacity: 0, scale: 0.95, y: -20 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
+                          transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                          className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm relative overflow-hidden mb-4"
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                                {rule.name}
+                                {!rule.isActive && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">已停用</span>}
+                              </h3>
+                              <NextRunIndicator rule={rule} />
+                            </div>
+                            <div className="flex gap-2 items-center">
+                              <button onClick={() => handleDryRunRule(rule.id)} className="text-indigo-600 text-[11px] px-2 py-1 flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 rounded-md font-semibold transition-colors">
+                                <Sparkles className="w-3 h-3" />
+                                邏輯診斷
+                              </button>
+                              <button onClick={() => setEditingRule(rule)} className="text-amber-600 text-sm font-semibold hover:underline border-l border-slate-200 pl-2">編輯</button>
+                              <button onClick={() => saveRules(rules.filter(r => r.id !== rule.id))} className="text-rose-500 text-sm pl-1"><Trash2 className="w-4 h-4"/></button>
+                            </div>
                           </div>
-                          <div className="flex gap-2 items-center">
-                            <button onClick={() => handleDryRunRule(rule.id)} className="text-indigo-600 text-[11px] px-2 py-1 flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 rounded-md font-semibold transition-colors">
-                              <Sparkles className="w-3 h-3" />
-                              邏輯診斷
-                            </button>
-                            <button onClick={() => setEditingRule(rule)} className="text-amber-600 text-sm font-semibold hover:underline border-l border-slate-200 pl-2">編輯</button>
-                            <button onClick={() => saveRules(rules.filter(r => r.id !== rule.id))} className="text-rose-500 text-sm pl-1"><Trash2 className="w-4 h-4"/></button>
-                          </div>
-                        </div>
-                        <p className="text-sm text-slate-600 mt-2 bg-slate-50 p-2 rounded-xl whitespace-pre-line leading-relaxed">
-                          {calculatePreview(rule)}
-                        </p>
-                      </div>
-                    ))}
+                          <p className="text-sm text-slate-600 mt-2 bg-slate-50 p-2 rounded-xl whitespace-pre-line leading-relaxed">
+                            {calculatePreview(rule)}
+                          </p>
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
                     
                     <button
                       onClick={handleCreateRule}
@@ -607,13 +598,18 @@ const RuleBuilder = ({ rule, setRule, customers, products, onSave, onCancel, pre
 
   const toggleItem = (cIdx: number, type: 'customers' | 'products', val: string) => {
     const newConds = [...rule.conditions];
-    let arr = [...(newConds[cIdx][type] || [])];
+    const targetCond = { ...newConds[cIdx] }; 
+
+    let arr = [...(targetCond[type] || [])];
     if (arr.includes(val)) {
       arr = arr.filter(item => item !== val);
     } else {
       arr.push(val);
     }
-    newConds[cIdx][type] = arr;
+    
+    targetCond[type] = arr;
+    newConds[cIdx] = targetCond;
+
     setRule({...rule, conditions: newConds});
   };
 
@@ -717,14 +713,23 @@ const RuleBuilder = ({ rule, setRule, customers, products, onSave, onCancel, pre
                     return (
                       <span key={cId} className="bg-white border border-slate-200 text-slate-700 text-sm px-3 py-1 rounded-full flex items-center gap-1 shadow-sm font-medium">
                         {cName}
-                        <button onClick={() => toggleItem(cIdx, 'customers', cId)} className="text-slate-400 hover:text-rose-500 rounded-full ml-1"><X className="w-3 h-3" /></button>
+                        <button 
+                          type="button" 
+                          onClick={(e) => { e.preventDefault(); toggleItem(cIdx, 'customers', cId); }} 
+                          className="text-slate-400 hover:text-rose-500 rounded-full ml-1"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
                       </span>
                     )
                   })}
-                  <button onClick={() => {
-                    setActivePicker(activePicker?.index === cIdx && activePicker.type === 'customers' ? null : {index: cIdx, type: 'customers'})
-                    setSearchTerm('');
-                  }} className="text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3 py-1 rounded-full text-sm font-bold flex items-center shadow-sm transition-colors border border-emerald-200/50">
+                  <button 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setActivePicker(activePicker?.index === cIdx && activePicker.type === 'customers' ? null : {index: cIdx, type: 'customers'})
+                      setSearchTerm('');
+                    }} className="text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3 py-1 rounded-full text-sm font-bold flex items-center shadow-sm transition-colors border border-emerald-200/50">
                     ＋ 新增店家
                   </button>
                 </div>
@@ -738,10 +743,15 @@ const RuleBuilder = ({ rule, setRule, customers, products, onSave, onCancel, pre
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 transition-shadow"
                     />
                     <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-                      {customers.filter((c: any) => c.name.includes(searchTerm)).map((c: any) => {
+                      {customers.filter((c: any) => String(c?.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map((c: any) => {
                         const selected = (cond.customers || []).includes(c.id);
                         return (
-                          <button key={c.id} onClick={() => toggleItem(cIdx, 'customers', c.id)} className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-all border ${selected ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-slate-300'}`}>
+                          <button 
+                            key={c.id} 
+                            type="button" 
+                            onClick={(e) => { e.preventDefault(); toggleItem(cIdx, 'customers', c.id); }} 
+                            className={`text-left px-3 py-2 rounded-lg text-sm transition-all border ${selected ? 'border-amber-500 bg-amber-50 text-amber-700 font-bold ring-1 ring-amber-500' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-slate-300 font-medium'}`}
+                          >
                             {c.name}
                           </button>
                         )
@@ -775,14 +785,23 @@ const RuleBuilder = ({ rule, setRule, customers, products, onSave, onCancel, pre
                     return (
                       <span key={pId} className="bg-white border border-slate-200 text-slate-700 text-sm px-3 py-1 rounded-full flex items-center gap-1 shadow-sm font-medium">
                         {pId}
-                        <button onClick={() => toggleItem(cIdx, 'products', pId)} className="text-slate-400 hover:text-rose-500 rounded-full ml-1"><X className="w-3 h-3" /></button>
+                        <button 
+                          type="button" 
+                          onClick={(e) => { e.preventDefault(); toggleItem(cIdx, 'products', pId); }} 
+                          className="text-slate-400 hover:text-rose-500 rounded-full ml-1"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
                       </span>
                     )
                   })}
-                  <button onClick={() => {
-                    setActivePicker(activePicker?.index === cIdx && activePicker.type === 'products' ? null : {index: cIdx, type: 'products'});
-                    setSearchTerm('');
-                  }} className="text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full text-sm font-bold flex items-center shadow-sm transition-colors border border-blue-200/50">
+                  <button 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setActivePicker(activePicker?.index === cIdx && activePicker.type === 'products' ? null : {index: cIdx, type: 'products'});
+                      setSearchTerm('');
+                    }} className="text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full text-sm font-bold flex items-center shadow-sm transition-colors border border-blue-200/50">
                     ＋ 新增品項
                   </button>
                 </div>
@@ -796,10 +815,15 @@ const RuleBuilder = ({ rule, setRule, customers, products, onSave, onCancel, pre
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-shadow"
                     />
                     <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1">
-                      {products.filter((p: any) => p.name.includes(searchTerm)).map((p: any) => {
+                      {products.filter((p: any) => String(p?.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map((p: any) => {
                         const selected = (cond.products || []).includes(p.name);
                         return (
-                          <button key={p.name} onClick={() => toggleItem(cIdx, 'products', p.name)} className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-all border ${selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-slate-300'}`}>
+                          <button 
+                            key={p.name} 
+                            type="button" 
+                            onClick={(e) => { e.preventDefault(); toggleItem(cIdx, 'products', p.name); }} 
+                            className={`text-left px-3 py-2 rounded-lg text-sm transition-all border ${selected ? 'border-blue-500 bg-blue-50 text-blue-700 font-bold ring-1 ring-blue-500' : 'border-slate-100 bg-slate-50 text-slate-600 hover:border-slate-300 font-medium'}`}
+                          >
                             {p.name}
                           </button>
                         )
@@ -827,14 +851,16 @@ const RuleBuilder = ({ rule, setRule, customers, products, onSave, onCancel, pre
 
         <div className="flex gap-2">
           <button 
-            onClick={() => addConditionGroup('OR')}
+            type="button"
+            onClick={(e) => { e.preventDefault(); addConditionGroup('OR'); }}
             className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-sm font-bold flex justify-center items-center gap-2 transition-colors border border-dashed border-slate-300"
           >
             <Plus className="w-4 h-4" />
             新增條件 (OR / 或)
           </button>
           <button 
-            onClick={() => addConditionGroup('AND')}
+            type="button"
+            onClick={(e) => { e.preventDefault(); addConditionGroup('AND'); }}
             className="flex-1 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-sm font-bold flex justify-center items-center gap-2 transition-colors border border-dashed border-indigo-200"
           >
             <Plus className="w-4 h-4" />

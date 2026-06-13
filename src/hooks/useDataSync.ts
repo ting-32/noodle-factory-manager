@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import localforage from 'localforage';
 import { debounce } from 'lodash';
 import { Customer, Product, Order, OrderStatus, ToastType } from '../types';
-import { GAS_URL as DEFAULT_GAS_URL } from '../constants';
+import { GAS_URL as DEFAULT_GAS_URL, APP_VERSION } from '../constants';
 import { formatDateStr, normalizeDate, safeNumber } from '../utils';
 import { container } from '../core/di/AppContainer';
 import { DataMapper } from '../core/mappers/DataMapper';
 import { listenToDataChange, broadcastDataChange } from '../services/firebaseSync';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { useLogStore } from '../store/useLogStore';
 
 localforage.config({
   name: 'NMR_App_DB',
@@ -15,12 +17,20 @@ localforage.config({
 
 let globalSyncController: AbortController | null = null;
 
-const debouncedSaveData = debounce(async (key: string, data: any) => {
-  try {
-    await localforage.setItem(key, data);
-  } catch (error) {
-    console.error(`背景快取儲存失敗 [${key}]:`, error);
-  }
+const debounceCust = debounce(async (data: any) => {
+  try { await localforage.setItem('nm_cache_customers', data); } catch (e) { console.error(e); }
+}, 800);
+
+const debounceProd = debounce(async (data: any) => {
+  try { await localforage.setItem('nm_cache_products', data); } catch (e) { console.error(e); }
+}, 800);
+
+const debounceOrd = debounce(async (data: any) => {
+  try { await localforage.setItem('nm_cache_orders', data); } catch (e) { console.error(e); }
+}, 800);
+
+const debounceTrips = debounce(async (data: any) => {
+  try { await localforage.setItem('availableTrips', data); } catch (e) { console.error(e); }
 }, 800);
 
 export const useDataSync = (addToast: (msg: string, type: ToastType) => void) => {
@@ -57,9 +67,9 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
 
         let hasAnyCache = false;
 
-        if (cachedCust && cachedCust.length > 0) { setCustomers(cachedCust); hasAnyCache = true; }
-        if (cachedProd && cachedProd.length > 0) { setProducts(cachedProd); hasAnyCache = true; }
-        if (cachedOrd && cachedOrd.length > 0) { 
+        if (cachedCust) { setCustomers(cachedCust); hasAnyCache = true; }
+        if (cachedProd) { setProducts(cachedProd); hasAnyCache = true; }
+        if (cachedOrd) { 
            // 偵測並清理「幽靈狀態」，將上次意外中斷而遺留的 pending 轉為 error
            const cleanedOrders = cachedOrd.map(o => 
              o.syncStatus === 'pending' 
@@ -69,7 +79,7 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
            setOrders(cleanedOrders); 
            hasAnyCache = true; 
         }
-        if (cachedTrips && cachedTrips.length > 0) { setTrips(cachedTrips); hasAnyCache = true; }
+        if (cachedTrips) { setTrips(cachedTrips); hasAnyCache = true; }
         
         if (hasAnyCache) {
           setIsInitialLoading(false);
@@ -91,27 +101,27 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
   }, [customers, products, orders, trips]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      debouncedSaveData('availableTrips', trips);
+    if (typeof window !== 'undefined' && trips.length > 0) {
+      debounceTrips(trips);
     }
   }, [trips]);
   
   // NEW: Automator Effect to sink data to cache whenever it changes successfully
   useEffect(() => {
     if (typeof window !== 'undefined' && customers.length > 0) {
-      debouncedSaveData('nm_cache_customers', customers);
+      debounceCust(customers);
     }
   }, [customers]);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && products.length > 0) {
-      debouncedSaveData('nm_cache_products', products);
+      debounceProd(products);
     }
   }, [products]);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && orders.length > 0) {
-      debouncedSaveData('nm_cache_orders', orders);
+      debounceOrd(orders);
     }
   }, [orders]);
 
@@ -232,35 +242,33 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
         const newOrders = Object.values(orderMap);
         const fetchedTrips = result.trips || [];
         
-        // === 加入這段：每次輪詢時，將通知中心的設定存更新至本機快取 ===
+        // === 將通知中心的設定存更新至 Store ===
         if (result.settings) {
-           let rulesChanged = false;
-           if (result.settings.rules) {
-               const newRulesStr = JSON.stringify(result.settings.rules);
-               const oldRulesStr = localStorage.getItem('nm_reminder_rules');
-               if (newRulesStr !== oldRulesStr) {
-                   localStorage.setItem('nm_reminder_rules', newRulesStr);
-                   rulesChanged = true;
-               }
-           }
-           if (result.settings.lineChannelToken) {
-               localStorage.setItem('nm_line_token', result.settings.lineChannelToken);
-           }
-           if (result.settings.lineUserId) {
-               localStorage.setItem('nm_line_user_id', result.settings.lineUserId);
-           }
-           
-           if (rulesChanged) {
-               // 判斷當前是否開啟 NotificationCenterModal (用自訂屬性等方式，或者讓 NotificationCenterModal 攔截)
-               const evt = new CustomEvent('rules_updated_from_cloud', { detail: { isPollingUpdate: true } });
-               window.dispatchEvent(evt);
-               
-               // 這裡直接判斷 DOM 是不是有彈窗
-               const isModalOpen = document.getElementById('notification-center-modal') !== null;
-               if (!isModalOpen) {
-                 addToast("通知提醒規則已從雲端同步最新設定", "info");
-               }
-           }
+          const store = useSettingsStore.getState();
+          store.updateFromCloud(result.settings);
+          
+          const isModalOpen = document.getElementById('notification-center-modal') !== null;
+          if (!isModalOpen && store.hasCloudUpdate) {
+            addToast("通知提醒規則已從雲端同步最新設定", "info");
+            store.resetCloudUpdateFlag();
+          }
+        }
+        
+        const logStore = useLogStore.getState();
+        if (result.latestSystemLogTs && result.latestSystemLogTs > logStore.lastSyncSystemTs) {
+          container.logRepo.getSystemLogs(50).then(logs => {
+            logStore.setSystemLogs(logs, result.latestSystemLogTs!);
+            const isModalOpen = document.getElementById('notification-center-modal') !== null;
+            if (!isModalOpen) logStore.setUnreadLogs(true);
+          }).catch(err => console.error("Auto fetch system logs error:", err));
+        }
+
+        if (result.latestNotifyLogTs && result.latestNotifyLogTs > logStore.lastSyncNotifyTs) {
+          container.logRepo.getNotificationLogs(50).then(logs => {
+            logStore.setNotifyLogs(logs, result.latestNotifyLogTs!);
+            const isModalOpen = document.getElementById('notification-center-modal') !== null;
+            if (!isModalOpen) logStore.setUnreadLogs(true);
+          }).catch(err => console.error("Auto fetch notify logs error:", err));
         }
         // ========================================================
         
@@ -379,7 +387,7 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
 
   // Auth Functions
   const handleLogin = async (pwd: string) => { 
-    if (!apiEndpoint) { 
+    if (!apiEndpoint || apiEndpoint === 'https://mock-api.local') { 
       if (pwd === '8888') { 
         setIsAuthenticated(true); 
         localStorage.setItem('nm_auth_status', 'true'); 
@@ -401,13 +409,24 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
     } 
   };
 
-  const handleLogout = () => { 
+  const handleLogout = async () => { 
     setIsAuthenticated(false); 
-    localStorage.removeItem('nm_auth_status'); 
-    setCustomers([]); 
-    setOrders([]); 
-    setProducts([]); 
-    addToast("已安全登出", 'info'); 
+    setIsInitialLoading(true); // 重置載入狀態
+    
+    // 1. 保留 API 網址，因為同業換帳號不需要重新輸入網址
+    const currentEndpoint = localStorage.getItem('nm_gas_url');
+    
+    // 2. 清除所有 LocalStorage 與 IndexedDB
+    localStorage.clear();
+    await localforage.clear();
+    
+    // 3. 把 API 網址跟版本號救回來
+    if (currentEndpoint) localStorage.setItem('nm_gas_url', currentEndpoint);
+    localStorage.setItem('nm_app_version', APP_VERSION);
+    
+    // 4. 通知使用者並讓畫面乾淨重整
+    addToast('已安全登出並清除本地快取', 'info');
+    setTimeout(() => window.location.reload(), 500);
   };
 
   const handleChangePassword = async (oldPwd: string, newPwd: string) => { 
@@ -545,8 +564,12 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
   // Initial Sync
   useEffect(() => { 
     if (isAuthenticated) { 
-      localforage.getItem('nm_cache_orders').then(cache => {
-        const hasCache = Array.isArray(cache) && cache.length > 0;
+      Promise.all([
+        localforage.getItem('nm_cache_customers'),
+        localforage.getItem('nm_cache_products'),
+        localforage.getItem('nm_cache_orders')
+      ]).then(([c, p, o]) => {
+        const hasCache = !!(c || p || o);
         syncData(hasCache); 
       });
     } 
