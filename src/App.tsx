@@ -56,6 +56,7 @@ import { GlobalModals } from './components/layout/GlobalModals';
 import { ViewManager } from './components/layout/ViewManager';
 import { useAppAuth } from './hooks/useAppAuth';
 import { useDataSync } from './hooks/useDataSync';
+import { useBackgroundSync } from './hooks/useBackgroundSync';
 import { useOrderCalculations } from './hooks/useOrderCalculations';
 import { useVoiceAssistant } from './hooks/useVoiceAssistant';
 import { useOrderActions } from './hooks/useOrderActions';
@@ -147,6 +148,9 @@ const App: React.FC = () => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  const onReconciledRef = useRef<(id: string) => void>();
+  const isEditingRef = useRef(false);
+
   const {
     isAuthenticated,
     apiEndpoint, customers, setCustomers,
@@ -164,7 +168,7 @@ const App: React.FC = () => {
     handleForceRetry,
     saveOrderToCloud,
     saveTripsToCloud
-  } = useDataSync(addToast);
+  } = useDataSync(addToast, isEditingRef, (id) => onReconciledRef.current?.(id));
 
   const auth = useAppAuth({ handleLogin, addToast });
 
@@ -193,7 +197,35 @@ const App: React.FC = () => {
     }));
   }, [setOrders]);
 
-  const { syncQueue, addSyncTask, isSyncingQueue } = useSyncQueue(apiEndpoint, addToast, onSyncSuccess, onSyncError);
+  const onSyncGiveUp = useCallback((task: any) => {
+    setOrders((prev: Order[]) => prev.map(o => {
+      let isMatch = false;
+      if (task.type === 'UPDATE_STATUS' || task.type === 'BATCH_UPDATE') {
+        const ids = task.payload.updates.map((u: any) => u.id);
+        if (ids.includes(o.id)) isMatch = true;
+      } else if (task.payload && task.payload.id === o.id) {
+        isMatch = true;
+      }
+      
+      if (isMatch) {
+         // [防呆容錯 / 版本衝突退回]
+         // 當網路任務被徹底捨棄(例如：重試次數用盡，或遭遇不可逆的 VERSION_CONFLICT)
+         // 清除此筆本地死鎖標記。後續緊接著的 syncData 由於找不到 pending 標記，
+         // 就會聽命於雲端最新下發的資料，從而實現 UI 狀態的完美 Rollback。
+         return { ...o, syncStatus: undefined, _syncStatus: undefined, errorMessage: undefined, pendingAction: undefined };
+      }
+      return o;
+    }));
+    
+    // 引發一次雲端強拉
+    syncData(true);
+  }, [setOrders, syncData]);
+
+  const { syncQueue, addSyncTask, isSyncingQueue, removeTaskByPayloadId } = useSyncQueue(apiEndpoint, addToast, onSyncSuccess, onSyncError, onSyncGiveUp);
+
+  useEffect(() => {
+    onReconciledRef.current = removeTaskByPayloadId;
+  }, [removeTaskByPayloadId]);
 
   const customerMap = useMemo(() => {
     const map: Record<string, Customer> = {};
@@ -615,7 +647,9 @@ const App: React.FC = () => {
     lastOrderCandidate,
     setLastOrderCandidate,
     setToasts,
-    addSyncTask
+    addSyncTask,
+    removeTaskByPayloadId,
+    syncData
   });
 
   // NEW: Trigger confirm dialog for settlement
@@ -638,68 +672,10 @@ const App: React.FC = () => {
   
   // REFACTORED: syncData logic moved to useDataSync hook
 
-  // NEW: Automator Effect for Polling and Focus Refetch
-  useEffect(() => {
-    if (!isAuthenticated) return;
+  const isEditingAny = isAddingOrder || isEditingCustomer || isEditingProduct || !!quickAddData || !!editingOrderId;
+  isEditingRef.current = isEditingAny;
 
-    let intervalId: any = null;
-    let wakeoutId: any = null;
-
-    // 1. Define the silent sync executor with safety locks
-    const performSilentSync = () => {
-      if (document.visibilityState === 'hidden') return;
-      // Safety Lock: Don't sync if user is editing
-      if (isAddingOrder || isEditingCustomer || isEditingProduct || quickAddData || editingOrderId) {
-        console.log("使用者忙碌中，略過背景同步");
-        return;
-      }
-      
-      // Execute sync in silent mode
-      syncData(true);
-    };
-
-    const startPolling = () => {
-      if (!intervalId) {
-        intervalId = setInterval(performSilentSync, 60000);
-      }
-    };
-
-    const stopPolling = () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-      if (wakeoutId) {
-        clearTimeout(wakeoutId);
-        wakeoutId = null;
-      }
-    };
-
-    // Initial Start
-    startPolling();
-
-    // 4. Focus Logic (Revalidate on Focus with 2 seconds debounce on wake-up)
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        // 等待兩秒鐘暖機，讓作業系統重新連結 Wi-Fi 或蜂窩網路
-        wakeoutId = setTimeout(() => {
-          performSilentSync();
-          startPolling();
-        }, 2000);
-      } else {
-        // 進入隱藏休眠，清除所有可能引爆的定時器
-        stopPolling();
-      }
-    };
-
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    // Cleanup
-    return () => {
-      stopPolling();
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [isAuthenticated, syncData, isAddingOrder, isEditingCustomer, isEditingProduct, quickAddData, editingOrderId]);
+  useBackgroundSync({ isAuthenticated, apiEndpoint, syncData, isEditingLock: isEditingAny });
 
   // Keep original initial load effect for first render
   // (Handled in useDataSync)
@@ -731,16 +707,26 @@ const App: React.FC = () => {
     if (!apiEndpoint || isSaving) return false;
     setIsSaving(true);
     try {
-      const payload = finalCustomer;
+      const payload = { ...finalCustomer };
+      delete payload._syncStatus;
+      delete payload._localUpdatedTs;
+      
       if (isEditingCustomer !== 'new') {
         (payload as any).originalLastUpdated = originalLastUpdated;
         (payload as any).force = true;
       }
-      const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'updateCustomer', data: payload }) });
+      const token = localStorage.getItem('APP_SESSION_TOKEN');
+      const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'updateCustomer', token: token || "", data: payload }) });
       const json = await res.json();
       if (!json.success) {
-        setCustomers(previousCustomers); // Revert
+        if (json.error === "UNAUTHORIZED_OR_EXPIRED") {
+             localStorage.removeItem('nm_auth_status');
+             localStorage.removeItem('APP_SESSION_TOKEN');
+             window.dispatchEvent(new Event('app-unauthorized'));
+             return false;
+        }
         if (json.errorCode === 'ERR_VERSION_CONFLICT') {
+          setCustomers(previousCustomers); // 版本衝突時復原，交給 conflict UI 處理
           setConflictData({
             action: 'updateCustomer',
             data: payload,
@@ -750,6 +736,7 @@ const App: React.FC = () => {
             serverData: json.serverData || json.data
           });
         } else {
+          setCustomers(prev => prev.map(c => c.id === finalCustomer.id ? { ...c, _syncStatus: 'error' } : c));
           addToast('店家資料儲存失敗', 'error');
         }
         setIsSaving(false);
@@ -757,12 +744,16 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      setCustomers(previousCustomers); // Revert
+      setCustomers(prev => prev.map(c => c.id === finalCustomer.id ? { ...c, _syncStatus: 'error' } : c));
       addToast('店家資料儲存失敗，請檢查網路', 'error');
       setIsSaving(false);
       return false;
     }
     setIsSaving(false);
+    
+    // 解除 pending 狀態
+    setCustomers(prev => prev.map(c => c.id === finalCustomer.id ? { ...c, _syncStatus: 'synced' } : c));
+    
     addToast('店家資料已儲存', 'success');
     broadcastDataChange();
     return true;
@@ -770,14 +761,19 @@ const App: React.FC = () => {
 
   const onDeleteCustomerCloud = async (customerId: string, customerBackup: Customer) => {
     if (!apiEndpoint) return;
-    try {
-      await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'deleteCustomer', data: { id: customerId, originalLastUpdated: customerBackup.lastUpdated } }) });
-      broadcastDataChange();
-    } catch (e) {
-      console.error("刪除失敗:", e);
-      addToast("雲端同步刪除失敗，請檢查網路", 'error');
-      setCustomers(prev => [...prev, customerBackup]);
+    const token = localStorage.getItem('APP_SESSION_TOKEN');
+    const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'deleteCustomer', token: token || "", data: { id: customerId, originalLastUpdated: customerBackup.lastUpdated } }) });
+    const json = await res.json();
+    if (!json.success) {
+      if (json.error === "UNAUTHORIZED_OR_EXPIRED") {
+          localStorage.removeItem('nm_auth_status');
+          localStorage.removeItem('APP_SESSION_TOKEN');
+          window.dispatchEvent(new Event('app-unauthorized'));
+          return;
+      }
+      throw new Error(json.error || 'Delete failed');
     }
+    broadcastDataChange();
   };
 
 
@@ -893,15 +889,26 @@ const App: React.FC = () => {
     if (!apiEndpoint || isSaving) return false;
     setIsSaving(true);
     try {
-      const payload = finalProduct;
+      const payload = { ...finalProduct };
+      delete payload._syncStatus;
+      delete payload._localUpdatedTs;
+      
       if (isEditingProduct !== 'new') {
         (payload as any).originalLastUpdated = originalLastUpdated;
+        (payload as any).force = true;
       }
-      const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'updateProduct', data: payload }) });
+      const token = localStorage.getItem('APP_SESSION_TOKEN');
+      const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'updateProduct', token: token || "", data: payload }) });
       const json = await res.json();
       if (!json.success) {
-        setProducts(previousProducts);
+        if (json.error === "UNAUTHORIZED_OR_EXPIRED") {
+             localStorage.removeItem('nm_auth_status');
+             localStorage.removeItem('APP_SESSION_TOKEN');
+             window.dispatchEvent(new Event('app-unauthorized'));
+             return false;
+        }
         if (json.errorCode === 'ERR_VERSION_CONFLICT') {
+          setProducts(previousProducts);
           setConflictData({
             action: 'updateProduct',
             data: payload,
@@ -911,6 +918,7 @@ const App: React.FC = () => {
             serverData: json.serverData || json.data
           });
         } else {
+          setProducts(prev => prev.map(p => p.id === finalProduct.id ? { ...p, _syncStatus: 'error' } : p));
           addToast('品項資料儲存失敗', 'error');
         }
         setIsSaving(false);
@@ -918,33 +926,50 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      setProducts(previousProducts);
+      setProducts(prev => prev.map(p => p.id === finalProduct.id ? { ...p, _syncStatus: 'error' } : p));
       addToast('品項資料儲存失敗，請檢查網路', 'error');
       setIsSaving(false);
       return false;
     }
     setIsSaving(false);
+    
+    // 解除 pending 狀態
+    setProducts(prev => prev.map(p => p.id === finalProduct.id ? { ...p, _syncStatus: 'synced' } : p));
+    
     broadcastDataChange();
     return true;
   };
 
   const onDeleteProductCloud = async (productId: string, productBackup: Product) => {
     if (!apiEndpoint) return;
-    try {
-      await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'deleteProduct', data: { id: productId, originalLastUpdated: productBackup.lastUpdated } }) });
-      broadcastDataChange();
-    } catch (e) {
-      console.error("刪除失敗:", e);
-      addToast("雲端同步刪除失敗，請檢查網路", 'error');
-      setProducts(prev => [...prev, productBackup]);
+    const token = localStorage.getItem('APP_SESSION_TOKEN');
+    const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'deleteProduct', token: token || "", data: { id: productId, originalLastUpdated: productBackup.lastUpdated } }) });
+    const json = await res.json();
+    if (!json.success) {
+      if (json.error === "UNAUTHORIZED_OR_EXPIRED") {
+          localStorage.removeItem('nm_auth_status');
+          localStorage.removeItem('APP_SESSION_TOKEN');
+          window.dispatchEvent(new Event('app-unauthorized'));
+          return;
+      }
+      throw new Error(json.error || 'Delete failed');
     }
+    broadcastDataChange();
   };
 
   const onSaveProductOrderCloud = async (orderedIds: string[]) => {
      if (!apiEndpoint || isSaving) return false;
      setIsSaving(true);
      try {
-       await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'reorderProducts', data: orderedIds }) });
+       const token = localStorage.getItem('APP_SESSION_TOKEN');
+       const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'reorderProducts', token: token || "", data: orderedIds }) });
+       const json = await res.json();
+       if (json.error === "UNAUTHORIZED_OR_EXPIRED") {
+           localStorage.removeItem('nm_auth_status');
+           localStorage.removeItem('APP_SESSION_TOKEN');
+           window.dispatchEvent(new Event('app-unauthorized'));
+           return false;
+       }
        setInitialProductOrder(orderedIds);
        broadcastDataChange();
        return true;
@@ -1141,8 +1166,11 @@ const App: React.FC = () => {
          handleChangePassword={handleChangePassword}
          handleSaveApiUrl={handleSaveApiUrl}
          handleForceRetry={handleForceRetry}
+         isSaving={isSaving}
          customers={customers}
+         setCustomers={setCustomers}
          products={products}
+         setProducts={setProducts}
          orders={orders}
          previewDate={previewDate}
          setPreviewDate={setPreviewDate}

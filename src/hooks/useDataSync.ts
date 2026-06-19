@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, MutableRefObject } from 'react';
 import localforage from 'localforage';
 import { debounce } from 'lodash';
 import { Customer, Product, Order, OrderStatus, ToastType } from '../types';
@@ -33,7 +33,54 @@ const debounceTrips = debounce(async (data: any) => {
   try { await localforage.setItem('availableTrips', data); } catch (e) { console.error(e); }
 }, 800);
 
-export const useDataSync = (addToast: (msg: string, type: ToastType) => void) => {
+export function mergeWithPendingMutations<T extends { id: string; lastUpdated?: number; _syncStatus?: string; syncStatus?: string; _localUpdatedTs?: number; pendingAction?: string; }>(
+  localItems: T[],
+  cloudItems: T[]
+): T[] {
+  const mergedMap = new Map<string, T>();
+  
+  cloudItems.forEach(item => {
+    mergedMap.set(item.id, item);
+  });
+
+  localItems.forEach(localItem => {
+    const isPending = localItem._syncStatus === 'pending' || localItem.syncStatus === 'pending';
+    const isError = localItem._syncStatus === 'error' || localItem.syncStatus === 'error';
+    
+    if (isPending || isError) {
+      const cloudItem = mergedMap.get(localItem.id);
+      if (!cloudItem) {
+         if (localItem.pendingAction === 'delete') {
+            // It is not in the cloud, and we wanted to delete it. It's successfully deleted! Drop it.
+         } else {
+            // It is not in the cloud, and we wanted to create/update it. It's a new item or server cache is missing it. Keep it.
+            mergedMap.set(localItem.id, localItem);
+         }
+      } else {
+         const cloudV = cloudItem.lastUpdated || 0;
+         const localV = localItem._localUpdatedTs || localItem.lastUpdated || 0;
+         const isServerNewer = cloudV > localV;
+
+         if (isError && isServerNewer) {
+            // 代表在本地出錯卡死的這段時間，雲端有人更新過了（雲端時間 > 本地出錯時間）
+            // -> 別人已經處理好了，放棄本地錯誤版本，全面擁抱雲端最新資料
+            // 雲端資料 (cloudItem) 已經在 mergedMap 裡，所以什麼都不做
+         } else if (cloudV < localV || isPending) {
+            // 如果本地時間較新，或是我們還處於活躍的 pending 狀態
+            // 當 cloudV === localV 時，若為 pending，也優先相信本地
+            // (除非要等伺服器回來更新狀態為成功才解鎖)
+            mergedMap.set(localItem.id, localItem);
+         } else if (cloudV === localV && localItem.pendingAction === 'delete') {
+            mergedMap.set(localItem.id, localItem);
+         }
+      }
+    }
+  });
+
+  return Array.from(mergedMap.values());
+}
+
+export const useDataSync = (addToast: (msg: string, type: ToastType) => void, isEditingRef?: MutableRefObject<boolean>, onReconciled?: (orderId: string) => void) => {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('nm_auth_status') === 'true';
@@ -290,10 +337,10 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
         if (since > 0 && result.serverGlobalTs) {
            // 💡 訂單依然做增量合併，但字典檔 (客戶/商品) 採用全量覆蓋
            if (mappedCustomers.length > 0) {
-              setCustomers(mappedCustomers);
+              setCustomers(curr => mergeWithPendingMutations(curr, mappedCustomers));
            }
            if (mappedProducts.length > 0) {
-              setProducts(mappedProducts);
+              setProducts(curr => mergeWithPendingMutations(curr, mappedProducts));
            }
            if (fetchedTrips.length > 0) {
               setTrips(fetchedTrips);
@@ -314,6 +361,18 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
                     const existOrder = mergedMap.get(newOrder.id);
                     if (existOrder) {
                         if (existOrder.syncStatus === 'pending' || existOrder.syncStatus === 'error') {
+                            // [Reconciliation / 假性失敗的自動和解]
+                            // 偷看答案：如果目前這筆訂單的「雲端實際狀態」已經等於了我們本地「樂觀更新鎖死」的「變更目標」
+                            // 就代表我們先前的請求（如：切換為 PAID）GAS 已經處理成功，只是回傳時 Timeout 導致被誤判失敗。
+                            // 若狀態與趟次等關鍵維度完全吻合，即可「握手言和」，解除 UI 死鎖。
+                            if (newOrder.status === existOrder.status && newOrder.trip === existOrder.trip && newOrder.deliveryMethod === existOrder.deliveryMethod) {
+                                // 覆寫成純淨的雲端資料（無 pending/error）解鎖 UI
+                                mergedMap.set(newOrder.id, newOrder);
+                                // 通知 Queue 把舊的失敗任務刪除
+                                if (onReconciled) {
+                                    onReconciled(newOrder.id);
+                                }
+                            }
                             return; 
                         }
                         if ((existOrder.lastUpdated || 0) >= (newOrder.lastUpdated || 0)) {
@@ -331,7 +390,6 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
                         // 安全保護：跳過 "本地尚未上傳/重試中" 的訂單 以及 "歷史未帶 ID" 自動被冠上 MIGRATED- 前綴的老訂單
                         if (orderData.syncStatus === 'pending' || orderData.syncStatus === 'error') continue;
                         if (orderId.startsWith('MIGRATED-')) continue;
-                        if (orderId.startsWith('AUTO-')) continue;
                         if (orderId.startsWith('fallback_')) continue;
                         
                         // 若雲端有效名單內已經沒有這個 ID，即判定為已被其他裝置/後台刪除，進行本地除名
@@ -346,8 +404,8 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
            }
         } else {
            // Full replacement
-           setCustomers(mappedCustomers);
-           setProducts(mappedProducts);
+           setCustomers(curr => mergeWithPendingMutations(curr, mappedCustomers));
+           setProducts(curr => mergeWithPendingMutations(curr, mappedProducts));
            if (fetchedTrips.length > 0) {
                setTrips(fetchedTrips);
            }
@@ -618,66 +676,6 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
     } 
   }, [isAuthenticated, syncData]);
 
-  // Silent Background Polling
-  useEffect(() => {
-    if (!isAuthenticated || !apiEndpoint) return;
-
-    let pollInterval: any = null;
-    let wakeoutId: any = null;
-
-    const performPolling = async () => {
-      if (document.visibilityState === 'hidden') return;
-      try {
-        const { globalLastUpdated } = await container.syncRepo.checkUpdates();
-        const serverGlobalTs = globalLastUpdated;
-        if (lastGlobalUpdateRef.current > 0 && serverGlobalTs > lastGlobalUpdateRef.current) {
-          console.log("Background updates detected, syncing silently...");
-          syncData(true);
-        }
-        lastGlobalUpdateRef.current = serverGlobalTs;
-      } catch (e) {
-        // Suppress polling error log to avoid console spam when offline or endpoint is invalid
-      }
-    };
-
-    const startPolling = () => {
-      if (!pollInterval) {
-        pollInterval = setInterval(performPolling, 30000); // 30 seconds
-      }
-    };
-
-    const stopPolling = () => {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-      }
-      if (wakeoutId) {
-        clearTimeout(wakeoutId);
-        wakeoutId = null;
-      }
-    };
-
-    startPolling();
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        wakeoutId = setTimeout(() => {
-          performPolling();
-          startPolling();
-        }, 2000);
-      } else {
-        stopPolling();
-      }
-    };
-
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      stopPolling();
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [isAuthenticated, apiEndpoint, syncData]);
-
   // 🔔 Firebase Realtime Database 門鈴監聽器
   useEffect(() => {
     // 只有在登入成功後才開啟監聽
@@ -687,6 +685,10 @@ export const useDataSync = (addToast: (msg: string, type: ToastType) => void) =>
 
     try {
       unsubscribe = listenToDataChange(() => {
+        if (isEditingRef && isEditingRef.current) {
+          console.log(`收到 Firebase 門鈴訊號，但使用者編輯中，暫緩同步...`);
+          return;
+        }
         console.log(`🔔 收到 Firebase 門鈴訊號！準備背景同步...`);
         syncData(true);
       });

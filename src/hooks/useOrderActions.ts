@@ -36,6 +36,8 @@ interface UseOrderActionsProps {
   setLastOrderCandidate: React.Dispatch<React.SetStateAction<any>>;
   setToasts: React.Dispatch<React.SetStateAction<any[]>>;
   addSyncTask?: (task: any) => void;
+  removeTaskByPayloadId?: (payloadId: string) => void;
+  syncData?: (forceRefresh?: boolean) => void; // also add syncData if needed, wait no we need to trigger syncData, so I will add syncData to props too
 }
 
 export const useOrderActions = ({
@@ -67,7 +69,9 @@ export const useOrderActions = ({
   lastOrderCandidate,
   setLastOrderCandidate,
   setToasts,
-  addSyncTask
+  addSyncTask,
+  removeTaskByPayloadId,
+  syncData
 }: UseOrderActionsProps) => {
 
   const pendingUpdatesRef = useRef<Map<string, any>>(new Map());
@@ -188,7 +192,7 @@ export const useOrderActions = ({
     });
 
     const newOrder: Order = {
-      id: 'Q-ORD-' + Date.now(),
+      id: 'Q-ORD-' + Date.now() + Math.random().toString(36).substring(2, 6),
       createdAt: new Date().toISOString(),
       customerName: quickAddData.customerName,
       deliveryDate: selectedDate,
@@ -239,8 +243,9 @@ export const useOrderActions = ({
     if (!orderToUpdate) return;
 
     // 1. 純前端瞬間切換狀態 (Optimistic UI 飛速體驗) 🚀
+    const now = Date.now();
     setOrders((prev: Order[]) => prev.map(o => 
-      o.id === orderId ? { ...o, status: newStatus, syncStatus: 'pending', pendingAction: 'statusUpdate' } : o
+      o.id === orderId ? { ...o, status: newStatus, syncStatus: 'pending', pendingAction: 'statusUpdate', _syncStatus: 'pending', _localUpdatedTs: now } : o
     ));
 
     // 2. 將實際的連線動作包裝成任務，交給背景 Queue 處理
@@ -275,8 +280,9 @@ export const useOrderActions = ({
     if (!orderIds.length) return;
 
     // 1. 純前端瞬間切換狀態 (Optimistic UI)
+    const now = Date.now();
     setOrders((prev: Order[]) => prev.map(o => 
-      orderIds.includes(o.id) ? { ...o, status: OrderStatus.PAID, syncStatus: 'pending', pendingAction: 'statusUpdate' } : o
+      orderIds.includes(o.id) ? { ...o, status: OrderStatus.PAID, syncStatus: 'pending', pendingAction: 'statusUpdate', _syncStatus: 'pending', _localUpdatedTs: now } : o
     ));
 
     // 2. 將實際的連線動作包裝成任務，交給背景 Queue 處理
@@ -303,13 +309,20 @@ export const useOrderActions = ({
         const customerName = firstOrder?.customerName || '';
         const deliveryDate = firstOrder?.deliveryDate || '';
 
-        addSyncTask({
-          taskId: crypto.randomUUID(),
-          type: 'BATCH_UPDATE',
-          payload: { updates: updatesToProcess, customerName, deliveryDate },
-          retryCount: 0,
-          timestamp: Date.now()
-        });
+        // [防呆容錯 / 批次 Payload 節流切塊]
+        // 為了避免一次修改 200 筆訂單導致網路壅塞或是 GAS 執行超時，將大型批次操作自動分切為多個 Chunk。
+        // 前端瞬間呈現 200 筆綠燈，而背景依照 CHUNK_SIZE 優雅依序更新。
+        const CHUNK_SIZE = 30;
+        for (let i = 0; i < updatesToProcess.length; i += CHUNK_SIZE) {
+            const chunk = updatesToProcess.slice(i, i + CHUNK_SIZE);
+            addSyncTask({
+              taskId: crypto.randomUUID(),
+              type: 'BATCH_UPDATE',
+              payload: { updates: chunk, customerName, deliveryDate },
+              retryCount: 0,
+              timestamp: Date.now()
+            });
+        }
 
         addToast(`已成功結清 ${orderIds.length} 筆訂單`, 'success');
     }
@@ -621,8 +634,9 @@ export const useOrderActions = ({
       return { productId: item.productId, quantity: Math.max(0, finalQuantity), unit: finalUnit };
     });
 
+    const timestamp = Date.now();
     const newOrder: Order = {
-      id: editingOrderId || 'ORD-' + Date.now(),
+      id: editingOrderId || 'ORD-' + timestamp + Math.random().toString(36).substring(2, 6),
       createdAt: editingOrderId ? (orders.find(o => o.id === editingOrderId)?.createdAt || new Date().toISOString()) : new Date().toISOString(),
       customerName: orderForm.customerName,
       deliveryDate: orderForm.date || selectedDate,
@@ -635,7 +649,10 @@ export const useOrderActions = ({
       status: editingOrderId ? (orders.find(o => o.id === editingOrderId)?.status || OrderStatus.PENDING) : OrderStatus.PENDING,
       version: editingOrderId ? editingVersionRef.current : undefined,
       syncStatus: 'pending',
-      pendingAction: editingOrderId ? 'update' : 'create'
+      pendingAction: editingOrderId ? 'update' : 'create',
+      _syncStatus: 'pending',
+      _localUpdatedTs: timestamp,
+      lastUpdated: timestamp
     };
 
     // Optimistic Update
@@ -663,11 +680,11 @@ export const useOrderActions = ({
       editingOrderId ? 'updateOrderContent' : 'createOrder',
       editingVersionRef.current,
       () => {
-         setOrders((prev: Order[]) => prev.map(o => o.id === newOrder.id ? { ...o, syncStatus: 'synced', pendingAction: undefined } : o));
+         setOrders((prev: Order[]) => prev.map(o => o.id === newOrder.id ? { ...o, syncStatus: 'synced', pendingAction: undefined, _syncStatus: 'synced' } : o));
          addToast('同步成功', 'success');
       },
       (errMsg: string) => {
-         setOrders((prev: Order[]) => prev.map(o => o.id === newOrder.id ? { ...o, syncStatus: 'error', errorMessage: errMsg } : o));
+         setOrders((prev: Order[]) => prev.map(o => o.id === newOrder.id ? { ...o, syncStatus: 'error', errorMessage: errMsg, _syncStatus: 'error' } : o));
          addToast("同步失敗，已標記為錯誤", 'error');
       }
     );
@@ -677,48 +694,21 @@ export const useOrderActions = ({
     setConfirmConfig((prev: any) => ({ ...prev, isOpen: false })); 
     const orderBackup = orders.find(o => o.id === orderId); 
     if (!orderBackup) return; 
-    setOrders((prev: Order[]) => prev.filter(o => o.id !== orderId)); 
-    try { 
-      if (apiEndpoint) { 
-        const payload = { id: orderId, version: orderBackup.version };
-        const token = localStorage.getItem('APP_SESSION_TOKEN');
-        const res = await fetchWithRetry(apiEndpoint, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'deleteOrder', token: token || "", data: payload }) }); 
-        const json = await res.json();
-        if (!json.success) {
-            if (json.error === "UNAUTHORIZED_OR_EXPIRED") {
-                localStorage.removeItem('nm_auth_status');
-                localStorage.removeItem('APP_SESSION_TOKEN');
-                localStorage.removeItem('APP_USER_ROLE');
-                localStorage.removeItem('APP_USER_NAME');
-                window.dispatchEvent(new Event('app-unauthorized'));
-                return;
-            }
-            if (json.errorCode === 'ERR_VERSION_CONFLICT' || json.errorCode === 'VERSION_CONFLICT') {
-               setOrders((prev: Order[]) => [...prev, orderBackup]); // Revert
-               setConflictData({
-                  action: 'deleteOrder',
-                  data: payload,
-                  description: `刪除訂單: ${orderBackup.customerName}`,
-                  type: 'delete_order',
-                  clientData: payload,
-                  serverData: json.serverData || json.data
-               });
-               return;
-            } else {
-               // Add back with error status
-               setOrders((prev: Order[]) => [...prev, { ...orderBackup, syncStatus: 'error', errorMessage: json.error || 'Delete failed', pendingAction: 'delete' }]);
-               addToast("刪除失敗，已標記為錯誤", 'error');
-            }
-         } else {
-            broadcastDataChange();
-         }
-      } 
-    } catch (e) { 
-      if (e instanceof Error && e.message === "UNAUTHORIZED_OR_EXPIRED") return;
-      console.error("刪除失敗:", e); 
-      setOrders((prev: Order[]) => [...prev, { ...orderBackup, syncStatus: 'error', errorMessage: e instanceof Error ? e.message : 'Network error', pendingAction: 'delete' }]);
-      addToast("刪除失敗，已標記為錯誤", 'error'); 
-    } 
+
+    const now = Date.now();
+    // Instead of completely removing, we mark it as pending deletion to prevent cache revert resurrections
+    setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, _syncStatus: 'pending', syncStatus: 'pending', pendingAction: 'delete', _localUpdatedTs: now } : o));
+
+    if (apiEndpoint && addSyncTask) {
+      addSyncTask({
+        id: `DELETE_${orderId}_${now}`,
+        type: 'delete_order',
+        payload: { id: orderId, version: orderBackup.version },
+        description: `刪除訂單 ${orderBackup.customerName}`
+      });
+    } else {
+      setOrders((prev: Order[]) => prev.filter(o => o.id !== orderId));
+    }
   };
 
   const handleBatchUpdateTrip = async (tripName: string, selectedOrderIds: Set<string>, setSelectedOrderIds: (s: Set<string>) => void, setIsSelectionMode: (b: boolean) => void) => {
@@ -726,9 +716,10 @@ export const useOrderActions = ({
     setIsSaving(true);
     
     const ids = Array.from(selectedOrderIds);
+    const now = Date.now();
     const updatedOrders = orders.map(o => {
       if (ids.includes(o.id)) {
-        return { ...o, trip: tripName, syncStatus: 'pending' as const, pendingAction: 'update' as const };
+        return { ...o, trip: tripName, syncStatus: 'pending' as const, pendingAction: 'update' as const, _syncStatus: 'pending' as const, _localUpdatedTs: now };
       }
       return o;
     });
@@ -743,10 +734,10 @@ export const useOrderActions = ({
           'updateOrderContent',
           order.version,
           () => {
-             setOrders((prev: Order[]) => prev.map(o => o.id === id ? { ...o, syncStatus: 'synced', pendingAction: undefined } : o));
+             setOrders((prev: Order[]) => prev.map(o => o.id === id ? { ...o, syncStatus: 'synced', pendingAction: undefined, _syncStatus: 'synced' } : o));
           },
           (errMsg: string) => {
-             setOrders((prev: Order[]) => prev.map(o => o.id === id ? { ...o, syncStatus: 'error', errorMessage: errMsg } : o));
+             setOrders((prev: Order[]) => prev.map(o => o.id === id ? { ...o, syncStatus: 'error', errorMessage: errMsg, _syncStatus: 'error' } : o));
           }
         );
       }
@@ -771,7 +762,8 @@ export const useOrderActions = ({
     if (!order || !order.pendingAction) return;
 
     // Reset status to pending
-    setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'pending', errorMessage: undefined } : o));
+    const now = Date.now();
+    setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'pending', errorMessage: undefined, _syncStatus: 'pending', _localUpdatedTs: now } : o));
 
     const action = order.pendingAction;
     try {
@@ -780,8 +772,8 @@ export const useOrderActions = ({
           order,
           'updateOrderStatus',
           order.version,
-          () => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'synced', pendingAction: undefined } : o)),
-          (errMsg: string) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'error', errorMessage: errMsg } : o))
+          () => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'synced', pendingAction: undefined, _syncStatus: 'synced' } : o)),
+          (errMsg: string) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'error', errorMessage: errMsg, _syncStatus: 'error' } : o))
         );
       } else if (action === 'delete') {
          executeDeleteOrder(orderId);
@@ -790,16 +782,16 @@ export const useOrderActions = ({
           order,
           'createOrder',
           undefined,
-          (updatedOrder: Order) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...updatedOrder, syncStatus: 'synced', pendingAction: undefined } : o)),
-          (errMsg: string) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'error', errorMessage: errMsg } : o))
+          (updatedOrder: Order) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...updatedOrder, syncStatus: 'synced', pendingAction: undefined, _syncStatus: 'synced' } : o)),
+          (errMsg: string) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'error', errorMessage: errMsg, _syncStatus: 'error' } : o))
         );
       } else if (action === 'update') {
          await saveOrderToCloud(
           order,
           'updateOrderContent',
           order.version,
-          (updatedOrder: Order) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'synced', pendingAction: undefined, version: updatedOrder.version } : o)),
-          (errMsg: string) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'error', errorMessage: errMsg } : o))
+          (updatedOrder: Order) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'synced', pendingAction: undefined, version: updatedOrder.version, _syncStatus: 'synced' } : o)),
+          (errMsg: string) => setOrders((prev: Order[]) => prev.map(o => o.id === orderId ? { ...o, syncStatus: 'error', errorMessage: errMsg, _syncStatus: 'error' } : o))
         );
       }
     } catch (e) {
@@ -807,18 +799,27 @@ export const useOrderActions = ({
     }
   }, [orders, setOrders, saveOrderToCloud, executeDeleteOrder]);
 
-  const handleDiscardLocalError = useCallback((orderId: string) => {
+  const handleDiscardLocalError = useCallback(async (orderId: string) => {
     setOrders((prev: Order[]) => prev.map(o => {
       if (o.id === orderId) {
         if (o.pendingAction === 'create') {
           return null as any; // delete if it was a create
         }
-        return { ...o, syncStatus: 'synced', errorMessage: undefined, pendingAction: undefined };
+        return { ...o, syncStatus: undefined, _syncStatus: undefined, errorMessage: undefined, pendingAction: undefined };
       }
       return o;
     }).filter(Boolean));
-    addToast('已捨棄本地該筆異常任務。', 'info');
-  }, [setOrders, addToast]);
+    
+    if (removeTaskByPayloadId) {
+      await removeTaskByPayloadId(orderId);
+    }
+    
+    addToast('已還原至雲端最新狀態', 'success');
+    
+    if (syncData) {
+      syncData(true);
+    }
+  }, [setOrders, addToast, removeTaskByPayloadId, syncData]);
 
   return {
     handleQuickAddSubmit,

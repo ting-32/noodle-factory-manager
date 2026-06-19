@@ -135,6 +135,7 @@ export const useOrderCalculations = ({
   // 4. Schedule Tab Orders
   const scheduleOrders = useMemo(() => {
     const rawOrders = orders.filter(o => {
+      if (o.pendingAction === 'delete') return false;
       if (o.deliveryDate !== scheduleDate) return false;
       if (scheduleDeliveryMethodFilter.length > 0) {
         const customer = customers.find(c => c.name === o.customerName);
@@ -175,21 +176,30 @@ export const useOrderCalculations = ({
     
     let thisMonthRevenue = 0;
     let thisMonthCollected = 0;
+    let thisMonthPendingCollected = 0;
     
     const now = new Date();
     const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
     orders.forEach(order => {
+      if (order.pendingAction === 'delete') return;
       const amount = calculateOrderTotalAmount(order);
+      const isPending = order.syncStatus === 'pending' || order.syncStatus === 'error';
       
       // Calculate this month's revenue
       if (order.deliveryDate.startsWith(currentMonthPrefix) && order.status !== OrderStatus.CANCELLED) {
         thisMonthRevenue += amount;
         if (order.status === OrderStatus.PAID) {
-          thisMonthCollected += amount;
+          if (!isPending) {
+            thisMonthCollected += amount;
+          } else {
+            thisMonthPendingCollected += amount;
+          }
         }
       }
 
+      // If it is UNPAID (or optimistic UNPAID, which is fine), it's debt.
+      // Or if it is optimistic PAID but pending, then the server STILL considers it debt.
       if (order.status !== OrderStatus.PAID && order.status !== OrderStatus.CANCELLED) {
         grandTotalDebt += amount;
 
@@ -204,6 +214,12 @@ export const useOrderCalculations = ({
         if (order.deliveryDate < entry.oldestDate) {
           entry.oldestDate = order.deliveryDate;
         }
+      } else if (order.status === OrderStatus.PAID && isPending) {
+        // Technically this is still unpaid on the server, so we could show it as "Server Debt".
+        // But if we want local UI to be responsive, maybe we shouldn't add it to grandTotalDebt directly,
+        // or we CAN add it to grandTotalDebt but subtract it visually. 
+        // Let's just track it in case we need it, but for now we follow user's UI requirement:
+        // User mainly talked about collected amount.
       }
     });
 
@@ -221,13 +237,14 @@ export const useOrderCalculations = ({
       })
       .sort((a, b) => b.totalDebt - a.totalDebt);
 
-    return { grandTotalDebt, outstanding: sortedOutstanding, thisMonthRevenue, thisMonthCollected };
+    return { grandTotalDebt, outstanding: sortedOutstanding, thisMonthRevenue, thisMonthCollected, thisMonthPendingCollected };
   }, [orders, customers, products]);
 
   // 7. Settlement Preview
   const settlementPreview = useMemo(() => {
     if (!settlementTarget) return null;
     const filteredOrders = orders.filter(o => {
+      if (o.pendingAction === 'delete') return false;
       if (!settlementTarget.allOrderIds.includes(o.id)) return false;
       return o.deliveryDate <= settlementDate;
     });
@@ -243,7 +260,7 @@ export const useOrderCalculations = ({
   // 8. Grouped Orders (Main Order List)
   const { groups: groupedOrders, dayOrders } = useMemo(() => {
     const groups: { [key: string]: Order[] } = {};
-    let dayOrders = orders.filter(o => o.deliveryDate === selectedDate);
+    let dayOrders = orders.filter(o => o.deliveryDate === selectedDate && o.pendingAction !== 'delete');
 
     // Filter by Search Term
     if (orderSearch) {
@@ -290,7 +307,7 @@ export const useOrderCalculations = ({
 
   // 10. Work Sheet Data (Production List)
   const workSheetData = useMemo(() => {
-    let filtered = orders.filter(o => workDates.includes(o.deliveryDate));
+    let filtered = orders.filter(o => workDates.includes(o.deliveryDate) && o.pendingAction !== 'delete');
     
     // Deduplicate
     const seen = new Set();

@@ -230,7 +230,20 @@ function doPost(e) {
       try { CacheService.getScriptCache().remove("APP_CACHE_CPT"); } catch (err) {}
     }
 
-    notifyFirebase();
+    const mutationActions = [
+      "changePassword", "createOrder", "updateOrderContent", "updateOrderStatus",
+      "batchUpdateOrders", "batchUpdatePaymentStatus", "deleteOrder",
+      "reorderProducts", "updateCustomer", "deleteCustomer", 
+      "updateProduct", "deleteProduct", "saveTrips", "saveSettings"
+    ];
+    if (mutationActions.includes(action)) {
+      updateGlobalTimestamp();
+    }
+
+    const unneededNotifyActions = ["login", "checkUpdates", "getOrder", "testLineMessage", "dryRunRule", "getNotificationLogs", "getSystemLogs", "createOrder"];
+    if (!unneededNotifyActions.includes(action)) {
+      notifyFirebase();
+    }
 
     return ContentService.createTextOutput(JSON.stringify({ success: true, data: result }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -259,31 +272,21 @@ function doPost(e) {
 
 // --- Logic Functions ---
 
+function updateGlobalTimestamp() {
+  try {
+    let metaSheet = SS.getSheetByName("SystemMeta");
+    if (!metaSheet) {
+      metaSheet = SS.insertSheet("SystemMeta");
+      metaSheet.hideSheet();
+      metaSheet.getRange("A1").setValue("LastGlobalUpdate");
+    }
+    metaSheet.getRange("B1").setValue(new Date().getTime());
+  } catch (e) {
+    console.error("updateGlobalTimestamp error: ", e);
+  }
+}
+
 function checkUpdates(data) {
-  const sheets = getSheets();
-  let maxTs = 0;
-  
-  ['ORDERS', 'CUSTOMERS', 'PRODUCTS', 'RemindRules'].forEach(sheetName => {
-    let sheet;
-    if (sheetName === 'RemindRules') {
-      sheet = SS.getSheetByName("RemindRules"); // try to directly get RemindRules
-    } else {
-      sheet = sheets[sheetName];
-    }
-    if (!sheet) return;
-    const lastCol = sheet.getLastColumn();
-    if (lastCol === 0) return;
-    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    const lastUpdatedColIdx = headers.indexOf("LastUpdated");
-    if (lastUpdatedColIdx !== -1 && sheet.getLastRow() > 1) {
-      const values = sheet.getRange(2, lastUpdatedColIdx + 1, sheet.getLastRow() - 1, 1).getValues();
-      for (let i = 0; i < values.length; i++) {
-        const ts = parseLastUpdated(values[i][0]);
-        if (ts && ts > maxTs) maxTs = ts;
-      }
-    }
-  });
-  
   // 新增審計日誌攔截 (只有前端帶 auditObj 時才寫入)
   if (data && data.auditObj) {
     writeSystemLog("SYSTEM_DATA_ACCESS", "資料手動同步與檢視", JSON.stringify({
@@ -293,7 +296,9 @@ function checkUpdates(data) {
     }));
   }
   
-  return { globalLastUpdated: maxTs };
+  const metaSheet = SS.getSheetByName("SystemMeta");
+  const lastGlobalTs = metaSheet ? Number(metaSheet.getRange("B1").getValue()) : 0; 
+  return { globalLastUpdated: lastGlobalTs || 0 };
 }
 
 function getOrder(data) {
@@ -479,9 +484,24 @@ function getData(startDateStr, since = 0) {
           if (values.length <= 1) return [];
           const headers = values[0];
           const data = [];
+          
           for (let i = 1; i < values.length; i++) {
+            const row = values[i];
+
+            // ✨ 1. 防禦性檢查：保證 row 不是 undefined 或空陣列（防禦 API 例外回傳）
+            if (!row || row.length === 0) continue;
+            
+            // ✨ 2. 空白列檢查：確認是否整列都被清空了 (連純空白的字串也一起抓出來濾掉)
+            const isEmptyRow = row.every(cell => 
+              cell === '' || cell === null || cell === undefined || (typeof cell === 'string' && cell.trim() === '')
+            );
+            if (isEmptyRow) continue; 
+            
             let obj = {};
-            for (let j = 0; j < headers.length; j++) obj[headers[j]] = formatCellValue(values[i][j]);
+            for (let j = 0; j < headers.length; j++) {
+              // row[j] 放進 formatCellValue (已經避開了因為空列導致的 out-of-bounds error)
+              obj[headers[j]] = formatCellValue(row[j]);
+            }
             data.push(mapper(obj));
           }
           return data;
@@ -587,6 +607,7 @@ function getData(startDateStr, since = 0) {
     trip: o.Trip || o.trip || o.趟次 || ''
   }));
 
+    // filter by start date
   if (startDateStr) {
     const startStr = startDateStr.replace(/-/g, '');
     orders = orders.filter(o => {
@@ -620,7 +641,10 @@ function getData(startDateStr, since = 0) {
     });
   }
 
-  // 把目前試算表有效存活的訂單 ID 給提取出來 (只有增量同步需帶這包資料，以節省頻寬)
+  // 1. 先把標記為 DELETED 的訂單過濾掉，不再回傳給任何裝置
+  orders = orders.filter(o => String(o.status).trim().toUpperCase() !== 'DELETED');
+
+  // 2. 把目前試算表有效存活的訂單 ID 給提取出來 (只有增量同步需帶這包資料，作爲本地幽靈清掃的依據)
   const allActiveOrderIds = (since > 0) ? orders.map(o => String(o.id || "")).filter(id => id !== "") : [];
 
   if (since > 0) {
@@ -824,7 +848,7 @@ function saveTrips(data) {
   
   if (trips && trips.length > 0) {
     const rows = trips.map(t => [t]);
-    sheet.getRange(2, 1, rows.length, 1).setValues(rows);
+    safeSetValues(sheet, 2, 1, rows);
   }
   
   return true;
@@ -873,6 +897,38 @@ function ensureHeadersBatch(sheet, requiredHeaders) {
 
   // 回傳這張表所有的 { "欄位名稱": Index }
   return headerMap;
+}
+
+/**
+ * 安全地將資料寫入指定的 Row。
+ * 自動判斷並補齊實體 Column，避免「RangeException」閃退。
+ */
+function safeSetRowValues(sheet, rowIndex, rowDataArray) {
+  const maxCols = sheet.getMaxColumns(); // 取得目前的實體欄位總數
+  const targetCols = rowDataArray.length; // 我們準備要寫入的資料長度
+
+  // 若資料長度超過實體表格長度，手動為 Sheet 擴充欄位
+  if (targetCols > maxCols) {
+    sheet.insertColumnsAfter(maxCols, targetCols - maxCols);
+  }
+
+  // 擴充完畢後，就可以 100% 安全地執行寫入
+  sheet.getRange(rowIndex, 1, 1, targetCols).setValues([rowDataArray]);
+}
+
+/**
+ * 安全地將多筆資料寫入。
+ */
+function safeSetValues(sheet, startRow, startCol, dataArray) {
+  if (!dataArray || dataArray.length === 0) return;
+  const maxCols = sheet.getMaxColumns();
+  const targetCols = startCol - 1 + dataArray[0].length;
+  
+  if (targetCols > maxCols) {
+    sheet.insertColumnsAfter(maxCols, targetCols - maxCols);
+  }
+  
+  sheet.getRange(startRow, startCol, dataArray.length, dataArray[0].length).setValues(dataArray);
 }
 
 // Helper to check version conflict for Orders (樂觀鎖)
@@ -935,7 +991,7 @@ function createOrder(orderData) {
     
     if (rows.length > 0) {
       const lastRow = sheet.getLastRow();
-      sheet.getRange(lastRow + 1, 1, rows.length, maxCol).setValues(rows);
+      safeSetValues(sheet, lastRow + 1, 1, rows);
     }
     return { lastUpdated: lastUpdatedTs, version: 1 };
   } finally {
@@ -1028,7 +1084,7 @@ function updateOrderContent(orderData) {
     }
     
   if (newRows.length > 0) {
-    sheet.getRange(2, 1, newRows.length, totalCols).setValues(newRows);
+    safeSetValues(sheet, 2, 1, newRows);
   }
   
   return { lastUpdated: newLastUpdatedTs, version: currentVersion + 1 };
@@ -1065,7 +1121,7 @@ function updateOrderStatus(data) {
     
     if (rowsToUpdate.length > 0) {
       // 統一覆寫以避免多次 setValue 發送 API 請求的極大效能損耗
-      sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
+      safeSetValues(sheet, 2, 1, values.slice(1));
     } else {
       throw new Error("Order not found: " + targetId);
     }
@@ -1120,7 +1176,7 @@ function batchUpdateOrders(data) {
     }
     
     if (rowsToUpdate.length > 0) {
-      sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
+      safeSetValues(sheet, 2, 1, values.slice(1));
     }
     
     return { updatedCount, newLastUpdatedTs };
@@ -1148,59 +1204,72 @@ function batchUpdatePaymentStatus(data) {
   }
 
   if (modified && values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
+    safeSetValues(sheet, 2, 1, values.slice(1));
   }
   return true;
 }
 
 function deleteOrder(data) {
-  const sheet = getSheets().ORDERS;
-  const lastRow = sheet.getLastRow();
-  
-  if (lastRow <= 1) return false;
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    const sheet = getSheets().ORDERS;
+    const lastRow = sheet.getLastRow();
+    
+    if (lastRow <= 1) return false;
 
-  const headerMap = ensureHeadersBatch(sheet, ["LastUpdated", "Version", "Status"]);
-  const lastUpdatedColIdx = headerMap["LastUpdated"];
-  const versionColIdx = headerMap["Version"];
-  const statusColIdx = headerMap["Status"];
-  const totalCols = sheet.getMaxColumns();
-  const values = sheet.getDataRange().getValues();
-  const targetId = String(data.id).trim();
+    const headerMap = ensureHeadersBatch(sheet, ["LastUpdated", "Version", "Status"]);
+    const lastUpdatedColIdx = headerMap["LastUpdated"];
+    const versionColIdx = headerMap["Version"];
+    const statusColIdx = headerMap["Status"];
+    const totalCols = sheet.getMaxColumns();
+    const values = sheet.getDataRange().getValues();
+    const targetId = String(data.id).trim();
 
-  let modified = false;
-  let newVersion = 0;
-  
-  if (!cachedTimeZone) cachedTimeZone = SS.getSpreadsheetTimeZone() || "Asia/Taipei";
-  const tsString = Utilities.formatDate(new Date(), cachedTimeZone, "yyyy/MM/dd HH:mm:ss");
+    let modified = false;
+    let newVersion = 0;
+    
+    if (!cachedTimeZone) cachedTimeZone = SS.getSpreadsheetTimeZone() || "Asia/Taipei";
+    const tsString = Utilities.formatDate(new Date(), cachedTimeZone, "yyyy/MM/dd HH:mm:ss");
 
-  // Conflict check first
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][1]).trim() === targetId) {
-      if (!data.force && data.version !== undefined) {
-         checkOrderVersionStrict(values[i][versionColIdx], data.version);
+    // Conflict check first
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][1]).trim() === targetId) {
+        if (!data.force && data.version !== undefined) {
+           checkOrderVersionStrict(values[i][versionColIdx], data.version);
+        }
       }
     }
-  }
 
-  // Update rows
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][1]).trim() === targetId) {
-      if (!modified) {
-        newVersion = Number(values[i][versionColIdx] || 0) + 1;
-        modified = true;
+    // Update rows
+    for (let i = 1; i < values.length; i++) {
+      // 匹配 ID 欄位 (通常在 Col 2，也就是 values[i][1])
+      if (String(values[i][1]).trim() === targetId) {
+        if (!modified) {
+          newVersion = Number(values[i][versionColIdx] || 0) + 1;
+          modified = true;
+        }
+        
+        // Update Status, LastUpdated, Version in memory
+        // 注意：直接寫入第 9 欄 (index 8) 與 updateOrderStatus 一致，確保覆蓋 "狀態" 欄
+        values[i][8] = 'DELETED';
+        // 兼容性寫入，若動態取得的欄位跟 8 不同，也一併更新以防萬一
+        if (statusColIdx !== 8 && statusColIdx !== undefined) {
+           values[i][statusColIdx] = 'DELETED';
+        }
+        
+        values[i][lastUpdatedColIdx] = String(new Date().getTime());
+        values[i][versionColIdx] = newVersion;
       }
-      
-      // Update Status, LastUpdated, Version in memory
-      values[i][statusColIdx] = 'DELETED';
-      values[i][lastUpdatedColIdx] = tsString;
-      values[i][versionColIdx] = newVersion;
     }
-  }
 
-  if (modified && values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
+    if (modified && values.length > 1) {
+      safeSetValues(sheet, 2, 1, values.slice(1));
+    }
+    return true;
+  } finally {
+    lock.releaseLock();
   }
-  return true;
 }
 
 function reorderProducts(orderedIds) {
@@ -1233,7 +1302,7 @@ function reorderProducts(orderedIds) {
   });
   
   sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
-  sheet.getRange(2, 1, newRows.length, newRows[0].length).setValues(newRows);
+  safeSetValues(sheet, 2, 1, newRows);
   return true;
 }
 
@@ -1253,6 +1322,13 @@ function updateCustomer(data) {
     // 如果都找不到，在最後面上一個新標題
     let newIdx = headers.length;
     headers.push(defaultName);
+    
+    // 檢查是否超出 Sheet 實體寬度，超出的話先擴展，避免 Range Exception 閃退
+    const maxCols = sheet.getMaxColumns();
+    if (newIdx + 1 > maxCols) {
+      sheet.insertColumnAfter(maxCols);
+    }
+    
     sheet.getRange(1, newIdx + 1).setValue(defaultName);
     return newIdx;
   }
@@ -1320,7 +1396,7 @@ function updateCustomer(data) {
   
   // 將動態組裝好的精確列寫入試算表
   if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 1, 1, newRow.length).setValues([newRow]);
+    safeSetRowValues(sheet, rowIndex, newRow);
   } else {
     sheet.appendRow(newRow);
   }
@@ -1377,7 +1453,7 @@ function updateProduct(data) {
   ];
   
   if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+    safeSetRowValues(sheet, rowIndex, rowData);
   } else {
     sheet.appendRow(rowData);
   }
@@ -1424,10 +1500,14 @@ function generateTomorrowDefaultOrders() {
     const sheets = getSheets();
     const orderSheet = sheets.ORDERS;
   
-  const headerMap = ensureHeadersBatch(orderSheet, ["資料來源", "LastUpdated", "Trip"]);
+  const headerMap = ensureHeadersBatch(orderSheet, ["資料來源", "LastUpdated", "Trip", "Status", "狀態"]);
   const sourceColIdx = headerMap["資料來源"];
   const lastUpdatedColIdx = headerMap["LastUpdated"];
   const tripColIdx = headerMap["Trip"];
+  
+  // 取得狀態欄位位置 (自動適配英中文標題，預設降級為 Index 8)
+  const statusColIdx = headerMap["Status"] !== undefined ? headerMap["Status"] : 
+                       (headerMap["狀態"] !== undefined ? headerMap["狀態"] : 8);
   
   const timeZone = SS.getSpreadsheetTimeZone() || "Asia/Taipei";
   const today = new Date();
@@ -1449,14 +1529,17 @@ function generateTomorrowDefaultOrders() {
     let rowDate = existingOrders[i][3]; // 第 4 欄 (Index 3) 是出貨日期
     const rowCustomer = existingOrders[i][2]; // 第 3 欄 (Index 2) 是客戶名稱
     
+    // 👇 新增這行：抓取該筆訂單的狀態
+    const rowStatus = String(existingOrders[i][statusColIdx] || '').trim().toUpperCase();
+    
     // 【修改 1：統一型別】避免 Google Sheets 欄位為純 Date 物件，導致嚴格等於(===)比對失敗
     if (rowDate instanceof Date) {
       rowDate = Utilities.formatDate(rowDate, timeZone, "yyyy-MM-dd");
     }
     
     // 【修改 2：邏輯加強】只要明天 (targetDateStr) 已經有該客戶的訂單 (不論是手動建好的還是自動的)，
-    // 就將他記到「已建單名單」，接下來就不會再幫這間店新增訂單了。
-    if (rowDate === targetDateStr) {
+    // 而且該訂單的狀態不是 DELETED，就將他記到「已建單名單」，接下來就不會再幫這間店新增訂單了。
+    if (rowDate === targetDateStr && rowStatus !== 'DELETED') {
       alreadyGeneratedCustomers.add(rowCustomer); 
     }
   }
@@ -1633,20 +1716,22 @@ function onSpreadsheetChange(e) {
       if (lastUpdatedColIdx !== -1) {
         // 抓取整個 LastUpdated 欄道的值
         const lastUpdatedValues = sheet.getRange(2, lastUpdatedColIdx + 1, lastRow - 1, 1).getValues();
-        let rowsToUpdate = [];
-        
-        // 找出所有 LastUpdated 是空白的列
-        for (let i = 0; i < lastUpdatedValues.length; i++) {
-          if (!lastUpdatedValues[i][0]) {
-            rowsToUpdate.push(i + 2); // 陣列索引從 0 開始，加上標題列與位移，剛好是 i + 2 列
+        let modified = false;
+        const newColValues = lastUpdatedValues.map(row => {
+          if (!row[0]) {
+            modified = true;
+            return [currentTs]; // 補上新的時間戳
           }
-        }
-
-        // 把這些空白的列補上當前的時間戳記
-        rowsToUpdate.forEach(rowNum => {
-          sheet.getRange(rowNum, lastUpdatedColIdx + 1).setValue(currentTs).setNumberFormat('0');
-          isUpdated = true;
+          return [row[0]]; // 保留舊的時間戳
         });
+
+        if (modified) {
+          // [效能最佳化 / 避免 Quota 耗盡]
+          // 捨棄迴圈中多次調用 setValue() 的舊做法，改將整個直行的資料讀入記憶體修改後，
+          // 使用 setValues()「一發入魂寫回」 (In-Memory Bulk Write)，將時間降至 1 秒內。
+          sheet.getRange(2, lastUpdatedColIdx + 1, newColValues.length, 1).setValues(newColValues).setNumberFormat('0');
+          isUpdated = true;
+        }
       }
     });
 
@@ -2239,8 +2324,8 @@ function archiveOldOrders() {
       // 確保日期格式為 YYYY-MM-DD 以便字串比對
       const dateStr = String(deliveryDate).substring(0, 10); 
       
-      // 條件：超過 90 天前，且狀態為 PAID (已結清) 或 DELETED (已刪除)
-      if (dateStr < cutoffString && (status === 'PAID' || status === 'DELETED')) {
+      // 條件：超過 90 天前且狀態為 PAID (已結清)，或者狀態為 DELETED (已刪除，不論天數)
+      if ((dateStr < cutoffString && status === 'PAID') || status === 'DELETED') {
         ordersToArchive.push(row);
       } else {
         activeOrders.push(row);
@@ -2252,11 +2337,11 @@ function archiveOldOrders() {
     
     // 1. 將資料寫入封存表 (Append)
     const archiveLastRow = archiveSheet.getLastRow();
-    archiveSheet.getRange(archiveLastRow + 1, 1, ordersToArchive.length, headers.length).setValues(ordersToArchive);
+    safeSetValues(archiveSheet, archiveLastRow + 1, 1, ordersToArchive);
     
     // 2. 將主表清空並覆寫為「活躍中的訂單」
     orderSheet.clearContents();
-    orderSheet.getRange(1, 1, activeOrders.length, headers.length).setValues(activeOrders);
+    safeSetValues(orderSheet, 1, 1, activeOrders);
     
     // (可選) 寫入系統日誌
     try {
