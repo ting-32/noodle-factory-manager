@@ -335,6 +335,7 @@ function getOrder(data) {
     status: firstRow.Status || firstRow.status || firstRow.狀態,
     deliveryMethod: firstRow.DeliveryMethod || firstRow.deliveryMethod || firstRow.配送方式,
     lastUpdated: parseLastUpdated(firstRow.LastUpdated),
+    version: Number(firstRow.Version || 0),
     trip: firstRow.Trip || firstRow.trip || firstRow.趟次 || '',
     items: orderRows.map(r => ({
       productId: r.ProductName || r.productName || r.品項,
@@ -1000,31 +1001,93 @@ function createOrder(orderData) {
 }
 
 function updateOrderContent(orderData) {
-  const sheet = getSheets().ORDERS;
-  const headerMap = ensureHeadersBatch(sheet, ["LastUpdated", "Trip", "資料來源", "Version"]);
-  const lastUpdatedColIdx = headerMap["LastUpdated"];
-  const tripColIdx = headerMap["Trip"];
-  const sourceColIdx = headerMap["資料來源"];
-  const versionColIdx = headerMap["Version"];
-  
-  const maxColReq = Math.max(lastUpdatedColIdx, tripColIdx, sourceColIdx, versionColIdx) + 1;
-    if (sheet.getMaxColumns() < maxColReq) {
-      sheet.insertColumnsAfter(sheet.getMaxColumns(), maxColReq - sheet.getMaxColumns());
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    
+    const sheet = getSheets().ORDERS;
+    
+    // 動態標題映射 (Dynamic Header Mapping)
+    const headers = sheet.getRange(1, 1, 1, sheet.getMaxColumns()).getValues()[0];
+    const headerMap = {};
+    headers.forEach((h, i) => { if (h) headerMap[String(h).trim()] = i; });
+    
+    // 確保必備欄位存在
+    const requiredHeaders = ["LastUpdated", "Trip", "資料來源", "Version"];
+    let needsInsert = false;
+    requiredHeaders.forEach(req => {
+      if (headerMap[req] === undefined) {
+         headerMap[req] = headers.length;
+         headers.push(req);
+         needsInsert = true;
+      }
+    });
+
+    if (needsInsert) {
+      if (sheet.getMaxColumns() < headers.length) {
+         sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
+      }
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     }
+    
+    const lastUpdatedColIdx = headerMap["LastUpdated"];
+    const versionColIdx = headerMap["Version"];
+    const totalCols = headers.length;
 
     const lastRow = sheet.getLastRow();
-    const totalCols = sheet.getMaxColumns();
-
+    
+    // 預設寫回全表變數
     let values = [];
     if (lastRow > 1) {
       values = sheet.getDataRange().getValues();
     }
     
     const targetId = String(orderData.id).trim();
-    let originalCreatedAt = "";
-    
-    // 1. Conflict Detection Phase (In-Memory)
+    const newLastUpdatedTs = String(new Date().getTime());
     let currentVersion = 0;
+    
+    // PARTIAL UPDATE MODE (若前端只傳送 updateFields)
+    if (orderData.updateFields && !orderData.items) {
+      let updatedRowsCount = 0;
+      for (let i = values.length - 1; i >= 1; i--) {
+        if (String(values[i][1]).trim() === targetId) {
+          const sheetVersion = values[i][versionColIdx];
+          currentVersion = Number(sheetVersion || 0);
+          
+          if (!orderData.force) {
+            checkOrderVersionStrict(sheetVersion, orderData.version);
+          }
+          
+          // 在記憶體中進行屬性合併
+          for (const [key, newValue] of Object.entries(orderData.updateFields)) {
+            let colIndex = headerMap[key];
+            // 嘗試容錯不同的預設名稱
+            if (colIndex === undefined) {
+               if (key === 'note') colIndex = headerMap['備註'];
+               else if (key === 'trip') colIndex = headerMap['Trip'] || headerMap['趟次'];
+               else if (key === 'status') colIndex = headerMap['Status'] || headerMap['狀態'];
+               else if (key === 'deliveryDate') colIndex = headerMap['Date'] || headerMap['日期'];
+            }
+            if (colIndex !== undefined) {
+              values[i][colIndex] = newValue;
+            }
+          }
+          
+          values[i][lastUpdatedColIdx] = newLastUpdatedTs;
+          values[i][versionColIdx] = currentVersion + 1;
+          updatedRowsCount++;
+        }
+      }
+      
+      if (updatedRowsCount > 0) {
+        safeSetValues(sheet, 2, 1, values.slice(1));
+        return { lastUpdated: newLastUpdatedTs, version: currentVersion + 1 };
+      }
+      throw new Error("Order not found: " + targetId);
+    }
+    
+    // FULL UPDATE MODE (包含 items 異動，需要重新產生 rows)
+    let originalCreatedAt = "";
     if (lastRow > 1) {
       for (let i = values.length - 1; i >= 1; i--) {
         const sheetId = String(values[i][1]).trim();
@@ -1043,9 +1106,8 @@ function updateOrderContent(orderData) {
     if (!timestamp) {
       timestamp = Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
     }
-    const newLastUpdatedTs = String(new Date().getTime());
 
-    // 2. Filter out old rows (In-Memory Deletion)
+    // Filter out old rows (In-Memory Deletion)
     const newRows = [];
     if (lastRow > 1) {
       for (let i = 1; i < values.length; i++) {
@@ -1057,37 +1119,43 @@ function updateOrderContent(orderData) {
       }
     }
 
-    // 3. Append new rows
-    orderData.items.forEach(item => {
-      const row = new Array(totalCols).fill("");
-      row[0] = timestamp;
-      row[1] = orderData.id;
-      row[2] = orderData.customerName;
-      row[3] = orderData.deliveryDate;
-      row[4] = orderData.deliveryTime;
-      row[5] = item.productName || item.productId;
-      row[6] = item.quantity;
-      row[7] = orderData.note || "";
-      row[8] = orderData.status || "PENDING";
-      row[9] = orderData.deliveryMethod || "";
-      row[10] = item.unit || "斤";
-      row[lastUpdatedColIdx] = newLastUpdatedTs;
-      row[tripColIdx] = orderData.trip || "";
-      row[sourceColIdx] = orderData.source || "";
-      row[versionColIdx] = currentVersion + 1; // 每次更新遞增 version
-      newRows.push(row);
-    });
-    
-    // 4. Batch Write Back
+    // Append new rows
+    if (orderData.items && Array.isArray(orderData.items)) {
+      orderData.items.forEach(item => {
+        const row = new Array(totalCols).fill("");
+        row[0] = timestamp;
+        row[1] = orderData.id;
+        row[2] = orderData.customerName;
+        row[3] = orderData.deliveryDate;
+        row[4] = orderData.deliveryTime || "";
+        row[5] = item.productName || item.productId;
+        row[6] = item.quantity;
+        row[7] = orderData.note || "";
+        row[8] = orderData.status || "PENDING";
+        row[9] = orderData.deliveryMethod || "";
+        row[10] = item.unit || "斤";
+        
+        row[lastUpdatedColIdx] = newLastUpdatedTs;
+        if (headerMap["Trip"]) row[headerMap["Trip"]] = orderData.trip || "";
+        if (headerMap["資料來源"]) row[headerMap["資料來源"]] = orderData.source || "";
+        row[versionColIdx] = currentVersion + 1; 
+        
+        newRows.push(row);
+      });
+    }
+
     if (lastRow > 1) {
       sheet.getRange(2, 1, lastRow - 1, totalCols).clearContent();
     }
     
-  if (newRows.length > 0) {
-    safeSetValues(sheet, 2, 1, newRows);
+    if (newRows.length > 0) {
+      safeSetValues(sheet, 2, 1, newRows);
+    }
+    
+    return { lastUpdated: newLastUpdatedTs, version: currentVersion + 1 };
+  } finally {
+    lock.releaseLock();
   }
-  
-  return { lastUpdated: newLastUpdatedTs, version: currentVersion + 1 };
 }
 
 function updateOrderStatus(data) {
@@ -1095,9 +1163,32 @@ function updateOrderStatus(data) {
   try {
     lock.waitLock(15000);
     const sheet = getSheets().ORDERS;
-    const headerMap = ensureHeadersBatch(sheet, ["LastUpdated", "Version"]);
+    
+    const headers = sheet.getRange(1, 1, 1, sheet.getMaxColumns()).getValues()[0];
+    const headerMap = {};
+    headers.forEach((h, i) => { if (h) headerMap[String(h).trim()] = i; });
+    
+    const requiredHeaders = ["LastUpdated", "Version"];
+    let needsInsert = false;
+    requiredHeaders.forEach(req => {
+      if (headerMap[req] === undefined) {
+         headerMap[req] = headers.length;
+         headers.push(req);
+         needsInsert = true;
+      }
+    });
+
+    if (needsInsert) {
+      if (sheet.getMaxColumns() < headers.length) {
+         sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
+      }
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
+
     const lastUpdatedColIdx = headerMap["LastUpdated"];
     const versionColIdx = headerMap["Version"];
+    const statusColIdx = headerMap["Status"] || headerMap["狀態"] || 8; 
+    
     const values = sheet.getDataRange().getValues();
     const targetId = String(data.id).trim();
     const newLastUpdatedTs = String(new Date().getTime());
@@ -1112,7 +1203,7 @@ function updateOrderStatus(data) {
            checkOrderVersionStrict(currentVersion, data.version);
         }
         newVersion = Number(currentVersion || 0) + 1;
-        values[i][8] = data.status; // Status column (index 8 is col 9)
+        values[i][statusColIdx] = data.status; 
         values[i][lastUpdatedColIdx] = newLastUpdatedTs;
         values[i][versionColIdx] = newVersion;
         rowsToUpdate.push(i + 1);
@@ -1120,7 +1211,6 @@ function updateOrderStatus(data) {
     }
     
     if (rowsToUpdate.length > 0) {
-      // 統一覆寫以避免多次 setValue 發送 API 請求的極大效能損耗
       safeSetValues(sheet, 2, 1, values.slice(1));
     } else {
       throw new Error("Order not found: " + targetId);
@@ -1747,6 +1837,10 @@ function onSpreadsheetChange(e) {
 // 🔔 Notification Center Check (Intended for Time-Driven Trigger)
 // Runs periodically (e.g. hourly) to evaluate rules and send notifications
 function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
+  // 1. 設置碼表 (GAS 極限是 360 秒，我們設 280 秒也就是 4.6 分鐘就準備收尾)
+  const START_TIME = Date.now();
+  const TIME_LIMIT = 280000; 
+
   let forceRuleId = forceRuleIdOrEvent;
   let triggerSource = "MANUAL_TEST";
 
@@ -1759,6 +1853,8 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
   }
   
   let dryRunResults = [];
+  let batchLogs = []; // 把原本每一圈都在寫的日誌，全部存在記憶體
+
   const configSheet = getConfigSheet();
   const settingsDataStr = getSystemConfig(configSheet, "AppSettings");
   if (!settingsDataStr) return;
@@ -1804,30 +1900,56 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
   const formattedTimeStr = `${year}-${month}-${dateStr}(${dayName})${period}${displayHour}:${m}`;
   // =================================
   
-  // Date format YYYY-MM-DD
-  const todayStr = `${year}-${month}-${dateStr}`;
+  // 以昨天作為起點，避免遺漏
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const startFetchDateStr = Utilities.formatDate(yesterday, timeZone, "yyyy-MM-dd");
   
-  const data = getData(todayStr, 0); // Only get orders from today onwards
+  const data = getData(startFetchDateStr, 0); 
   const customers = data.customers || [];
   
+  // =================================
+  // 打擊範圍縮圈 (Data Bounding)
+  // 解決配額提早耗盡 (Quota Drain)，只抓出貨日與今天相差 3 天內的訂單進迴圈
+  // =================================
+  if (data.orders && Array.isArray(data.orders)) {
+    // 過濾前的數量，如果很大，這一步可以省下巨量運算時間
+    data.orders = data.orders.filter(order => {
+      let dStr = order.deliveryDate;
+      if (!dStr) return false;
+      let d = (dStr instanceof Date) ? dStr : new Date(String(dStr).split(' ')[0].replace(/\//g, '-'));
+      if (isNaN(d.getTime())) return true;
+      const diffDays = Math.abs((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays <= 3; // 取前後 3 天
+    });
+  }
+
   let notifications = [];
   
-  rules.forEach(rule => {
+  for (let r = 0; r < rules.length; r++) {
+    // 2. 迴圈每一圈都看錶，超過 4.6 分鐘直接停手
+    if (Date.now() - START_TIME > TIME_LIMIT) {
+      console.warn("即將超時，主動中斷規則檢查以確保寫入 Log！");
+      break; 
+    }
+
+    const rule = rules[r];
     // 定義初始偵測包
     let trace = { step: "INIT", message: "開始評估", customersEvaluated: 0, customersMatched: 0 };
 
     const logAndReturn = (status, details) => {
         if (!isDryRun) {
-            writeTraceLog(triggerSource, rule.id, rule.name, status, details);
+            const currentTs = Utilities.formatDate(new Date(), timeZone, "yyyy-MM-dd HH:mm:ss");
+            const safeDetails = details ? JSON.stringify(details) : "{}";
+            batchLogs.push([currentTs, triggerSource, rule.id, rule.name, status, safeDetails]);
         }
         if (isDryRun) dryRunResults.push({ ruleId: rule.id, ruleName: rule.name, status, details });
     };
 
-    if (forceRuleId && rule.id !== forceRuleId) return;
+    if (forceRuleId && rule.id !== forceRuleId) continue;
 
     if (!rule.isActive && rule.id !== forceRuleId) {
        logAndReturn("SKIPPED", { reason: "規則已停用" });
-       return;
+       continue;
     }
     
     // Check Date & Time match
@@ -1846,7 +1968,7 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
     
     if (!isTimeMatched) {
         // 時間未到或非指定星期，直接略過，不寫入試算表避免塞爆
-        return;
+        continue;
     }
     
     // === 支援多天檢查未來的訂單 ===
@@ -1906,7 +2028,7 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
 
     if (activeCustomers.length === 0) {
         logAndReturn("SKIPPED", { reason: "今日所有目標客戶皆為休假日", targetDatesText });
-        return;
+        continue;
     }
 
     const triggeredCustomers = activeCustomers.filter(customer => {
@@ -1951,7 +2073,7 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
 
     if (triggeredCustomers.length === 0) {
         logAndReturn("SKIPPED", { reason: "客戶有營業，但條件未達成 (例如客戶已下單)", targetDatesText });
-        return;
+        continue;
     }
 
     if (triggeredCustomers.length > 0) {
@@ -1993,7 +2115,7 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
         logError: (err) => logAndReturn("ERROR", { ...trace, Error: err.message || err.toString() })
       });
     }
-  });
+  }
   
   // Actually send
   if (notifications.length > 0) {
@@ -2008,33 +2130,68 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
       
       if (!isDryRun) {
         // 【修改點】針對每一則通知獨立發動 API 請求，使其成為獨立對話泡泡
-        notifications.forEach(n => {
-          try {
-            UrlFetchApp.fetch(endpoint, {
-              method: "post",
-              headers: { 
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + channelToken 
-              },
-              payload: JSON.stringify({
-                to: payloadTo,
-                // 只放入當下的這則 message
-                messages: [{ type: "text", text: n.message }]
-              })
-            });
-            // 該則訊息發送成功，寫入成功 Log
-            n.logSuccess();
-          } catch(err) {
-            console.log("LINE Messaging API failed: " + err.message);
-            // 該則訊息發送失敗，寫入失敗 Log
-            n.logError(err);
-          }
-        });
+        // 準備一個發射清單，採用 UrlFetchApp.fetchAll (非同步併發) 解決網路等待延遲
+        const requests = [];
+        for (let j = 0; j < notifications.length; j++) {
+           const n = notifications[j];
+           requests.push({
+             url: endpoint,
+             method: "post",
+             headers: { 
+               "Content-Type": "application/json",
+               "Authorization": "Bearer " + channelToken 
+             },
+             payload: JSON.stringify({
+               to: payloadTo,
+               messages: [{ type: "text", text: n.message }]
+             }),
+             muteHttpExceptions: true
+           });
+        }
+        
+        try {
+          // 全部一起發射！
+          const responses = UrlFetchApp.fetchAll(requests);
+          
+          // 發射完再來統一整理 Log
+          responses.forEach((res, index) => {
+            const n = notifications[index];
+            if (res.getResponseCode() === 200) {
+              n.logSuccess();
+            } else {
+              n.logError(new Error(`API failed with ${res.getResponseCode()}: ${res.getContentText()}`));
+            }
+          });
+        } catch (err) {
+           console.log("LINE Messaging API fetchAll failed: " + err.message);
+           notifications.forEach(n => n.logError(err));
+        }
       } else {
          notifications.forEach(n => n.logSuccess());
       }
     } else {
         notifications.forEach(n => n.logError(new Error("未設定 LINE userId")));
+    }
+  }
+
+  // 4. 安全下莊：統一一次性寫入 Log
+  if (batchLogs.length > 0) {
+    try {
+      const logSheet = getNotificationLogSheet();
+      const lastRow = logSheet.getLastRow();
+      let startRow = lastRow > 0 ? lastRow + 1 : 2;
+      logSheet.getRange(startRow, 1, batchLogs.length, batchLogs[0].length).setValues(batchLogs);
+      
+      // 效能防禦：Rolling Window (保留最新 800 筆)
+      const afterLastRow = logSheet.getLastRow();
+      const MAX_LOGS = 1000;
+      const DELETE_COUNT = 200;
+      
+      if (afterLastRow > MAX_LOGS) {
+        logSheet.deleteRows(2, DELETE_COUNT);
+      }
+    } catch (e) {
+      console.log("Failed to write batch logs: " + e.toString());
     }
   }
 
