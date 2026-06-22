@@ -6,19 +6,6 @@ const SS = SpreadsheetApp.getActiveSpreadsheet();
 let cachedTimeZone = null;
 
 // 👇 新增這個輔助函數：用來將試算表的 Date 物件格式化為乾淨的字串
-function formatCellValue(val) {
-  if (val instanceof Date) {
-    if (!cachedTimeZone) cachedTimeZone = SS.getSpreadsheetTimeZone() || "Asia/Taipei";
-    // Google Sheets 將純時間儲存為 1899 年的日期
-    if (val.getFullYear() <= 1900) {
-      return Utilities.formatDate(val, cachedTimeZone, "HH:mm");
-    } else {
-      return Utilities.formatDate(val, cachedTimeZone, "yyyy/MM/dd HH:mm:ss");
-    }
-  }
-  return val;
-}
-
 // Helper to ensure Config sheet exists and return it
 function getConfigSheet() {
   let sheet = SS.getSheetByName("Config");
@@ -307,7 +294,7 @@ function getOrder(data) {
   
   const sheets = getSheets();
   const sheet = sheets.ORDERS;
-  const values = sheet.getDataRange().getValues();
+  const values = sheet.getDataRange().getDisplayValues();
   const headers = values[0];
   
   let orderRows = [];
@@ -316,7 +303,7 @@ function getOrder(data) {
     if (rowId === String(orderId).trim()) {
       let obj = {};
       for (let j = 0; j < headers.length; j++) {
-        obj[headers[j]] = formatCellValue(values[i][j]);
+        obj[headers[j]] = values[i][j];
       }
       orderRows.push(obj);
     }
@@ -429,17 +416,46 @@ function getSheetData(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return []; // Only header or empty
   
-  const values = sheet.getDataRange().getValues();
+  const values = sheet.getDataRange().getDisplayValues();
   const headers = values[0];
   const data = [];
   for (let i = 1; i < values.length; i++) {
     let obj = {};
     for (let j = 0; j < headers.length; j++) {
-      obj[headers[j]] = formatCellValue(values[i][j]);
+      obj[headers[j]] = values[i][j];
     }
     data.push(obj);
   }
   return data;
+}
+
+// 新增這個局部讀取函式
+function getRecentSheetData(sheet, limit) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  
+  if (lastRow <= 1) return []; // 只有標題或空表
+  
+  // 計算要從哪一行開始讀 (起點至少是 2，因為第 1 行是標題)
+  const startRow = limit && lastRow > limit + 1 ? lastRow - limit + 1 : 2;
+  const numRows = lastRow - startRow + 1;
+  
+  // 分別取出 標題行 與 局部資料區塊，這大幅降低了讀取體積
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+  const dataValues = sheet.getRange(startRow, 1, numRows, lastColumn).getDisplayValues();
+  
+  const result = [];
+  for (let i = 0; i < dataValues.length; i++) {
+    const row = dataValues[i];
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      if (headers[j]) {
+        obj[headers[j]] = row[j]; // 拋棄 formatCellValue，大幅節省運算成本
+      }
+    }
+    result.push(obj);
+  }
+  return result;
 }
 
 function parseLastUpdated(val) {
@@ -478,7 +494,7 @@ function getData(startDateStr, since = 0) {
           sheets.PRODUCTS.getName() + "!A:Z",
           sheets.TRIPS.getName() + "!A:Z"
         ];
-        const res = Sheets.Spreadsheets.Values.batchGet(spreadsheetId, { ranges: ranges });
+        const res = Sheets.Spreadsheets.Values.batchGet(spreadsheetId, { ranges: ranges, valueRenderOption: 'FORMATTED_VALUE' });
         
         const parseBatch = (valRange, mapper) => {
           const values = valRange.values || [];
@@ -500,8 +516,7 @@ function getData(startDateStr, since = 0) {
             
             let obj = {};
             for (let j = 0; j < headers.length; j++) {
-              // row[j] 放進 formatCellValue (已經避開了因為空列導致的 out-of-bounds error)
-              obj[headers[j]] = formatCellValue(row[j]);
+              obj[headers[j]] = row[j];
             }
             data.push(mapper(obj));
           }
@@ -590,23 +605,41 @@ function getData(startDateStr, since = 0) {
     } catch(err) {}
   }
 
-  const ordersRaw = getSheetData(sheets.ORDERS);
-  let orders = ordersRaw.map(o => ({
-    id: o.ID || o.id || o["Order ID"] || o.訂單ID,
-    createdAt: o.CreatedAt || o.createdAt || o.建立時間,
-    customerName: o.CustomerName || o.customerName || o.客戶名,
-    deliveryDate: o.DeliveryDate || o.deliveryDate || o.配送日期,
-    deliveryTime: o.DeliveryTime || o.deliveryTime || o.配送時間,
-    productName: o.ProductName || o.productName || o.品項,
-    quantity: o.Quantity || o.quantity || o.數量,
-    unit: o.Unit || o.unit || o.單位,
-    note: o.Note || o.note || o.備註,
-    status: String(o.Status || o.status || o.狀態 || '').trim(),
-    deliveryMethod: o.DeliveryMethod || o.deliveryMethod || o.配送方式,
-    source: o.Source || o.source || o.資料來源 || '',
-    lastUpdated: parseLastUpdated(o.LastUpdated),
-    trip: o.Trip || o.trip || o.趟次 || ''
-  }));
+  // 改為：只抓取最新的 5000 筆資料 (確保涵蓋 90 天內的歷史訂單，以免被截斷)
+  const ordersRaw = getRecentSheetData(sheets.ORDERS, 5000);
+  if (!cachedTimeZone) cachedTimeZone = SS.getSpreadsheetTimeZone() || 'Asia/Taipei';
+  
+  let orders = ordersRaw.map(o => {
+    let rawDate = o.DeliveryDate || o.deliveryDate || o.配送日期;
+    let finalDateStr = '';
+    
+    if (rawDate instanceof Date) {
+      finalDateStr = Utilities.formatDate(rawDate, cachedTimeZone, "yyyy-MM-dd");
+    } else if (rawDate) {
+      finalDateStr = String(rawDate).trim().split(' ')[0]; // 取日期部分
+      finalDateStr = finalDateStr
+        .replace(/\//g, '-')
+        .replace(/-0?/g, '-')
+        .replace(/-(\d)(?!\d)/g, '-0$1'); // 確保 YYYY-MM-DD 格式
+    }
+
+    return {
+      id: o.ID || o.id || o["Order ID"] || o.訂單ID,
+      createdAt: o.CreatedAt || o.createdAt || o.建立時間,
+      customerName: o.CustomerName || o.customerName || o.客戶名,
+      deliveryDate: finalDateStr,
+      deliveryTime: o.DeliveryTime || o.deliveryTime || o.配送時間,
+      productName: o.ProductName || o.productName || o.品項,
+      quantity: o.Quantity || o.quantity || o.數量,
+      unit: o.Unit || o.unit || o.單位,
+      note: o.Note || o.note || o.備註,
+      status: String(o.Status || o.status || o.狀態 || '').trim(),
+      deliveryMethod: o.DeliveryMethod || o.deliveryMethod || o.配送方式,
+      source: o.Source || o.source || o.資料來源 || '',
+      lastUpdated: parseLastUpdated(o.LastUpdated),
+      trip: o.Trip || o.trip || o.趟次 || ''
+    };
+  });
 
     // filter by start date
   if (startDateStr) {
@@ -1102,7 +1135,11 @@ function updateOrderContent(orderData) {
       }
     }
 
-    let timestamp = formatCellValue(originalCreatedAt);
+    let timestamp = originalCreatedAt;
+    if (timestamp instanceof Date) {
+      if (!cachedTimeZone) cachedTimeZone = SS.getSpreadsheetTimeZone() || "Asia/Taipei";
+      timestamp = Utilities.formatDate(timestamp, cachedTimeZone, "yyyy/MM/dd HH:mm:ss");
+    }
     if (!timestamp) {
       timestamp = Utilities.formatDate(new Date(), SS.getSpreadsheetTimeZone(), "yyyy/MM/dd HH:mm:ss");
     }
@@ -2014,6 +2051,17 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
       return targetDateStrings.includes(normalizeGasDate(o.deliveryDate));
     });
     
+    // ★ 新增：預先將訂單依照 customerName 進行分組 (O(N) 的一次性操作)
+    const ordersByCustomer = {};
+    for (let i = 0; i < targetOrders.length; i++) {
+      const order = targetOrders[i];
+      const cName = order.customerName;
+      if (!ordersByCustomer[cName]) {
+        ordersByCustomer[cName] = [];
+      }
+      ordersByCustomer[cName].push(order);
+    }
+    
     // 過濾客戶 (如果客戶在"所有"勾選的目標日期都是休息或特休，才略過他)
     const activeCustomers = customers.filter(c => {
       const hasWorkingDay = targetDatesInfo.some(d => {
@@ -2043,8 +2091,11 @@ function checkReminders(forceRuleIdOrEvent = null, isDryRun = false) {
         let condMatched = false;
         if (condAppliesToCustomer) {
           const targetProducts = (cond.products && cond.products.length) ? cond.products : data.products.map(p => p.name);
-          const relevantOrders = targetOrders.filter(o => 
-            o.customerName === customer.name && targetProducts.includes(o.productName || o.product?.name)
+          
+          // ★ 修改後：直接從剛剛建好的索引表中 O(1) 提取
+          const customerOrders = ordersByCustomer[customer.name] || [];
+          const relevantOrders = customerOrders.filter(o => 
+            targetProducts.includes(o.productName || o.product?.name)
           );
 
           if (cond.status === 'UNORDERED') {
@@ -2447,66 +2498,130 @@ function verifyTokenAndGetPayload(token, dbPassword) {
 function archiveOldOrders() {
   const lock = LockService.getScriptLock();
   try {
-    // 允許等比較久，因為這是半夜執行的背景報表
+    // 允許等比較久，因為這是大範圍的背景資料轉移
     lock.waitLock(30000); 
     
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const orderSheet = ss.getSheetByName("ORDERS") || ss.getSheetByName("Orders");
-    const archiveSheet = ss.getSheetByName("ARCHIVE_ORDERS");
     
-    if (!orderSheet || !archiveSheet) return;
+    // 【修正 1】正確對應 History_Orders 分頁，若不存在則自動幫你建一個
+    let archiveSheet = ss.getSheetByName("History_Orders"); 
+    if (!archiveSheet) {
+      archiveSheet = ss.insertSheet("History_Orders");
+    }
     
+    if (!orderSheet) return;
+    
+    // 這裡我們用 getValues 來保留原始 Date 型別，因為後續我們需要做精準日期轉換
     const values = orderSheet.getDataRange().getValues();
     if (values.length <= 1) return; // 只有標題列
     
     const headers = values[0];
-    const statusColIdx = headers.indexOf("Status");
-    const dateColIdx = headers.indexOf("DeliveryDate");
     
-    if (statusColIdx === -1 || dateColIdx === -1) return;
+    // 【修正 2】加上中英文與大小寫的容錯尋找機制，確保能精準捕捉到欄位
+    const getColIdx = (aliases) => {
+       for (let i = 0; i < headers.length; i++) {
+           if (aliases.includes(String(headers[i]).trim())) return i;
+       }
+       return -1;
+    };
 
-    // 計算 90 天前的時間截點
+    const statusColIdx = getColIdx(["Status", "狀態", "status"]);
+    const dateColIdx = getColIdx(["DeliveryDate", "deliveryDate", "配送日期", "日期"]);
+    
+    if (statusColIdx === -1 || dateColIdx === -1) {
+       console.error("無法封存：找不到 狀態 或 配送日期 表頭");
+       return;
+    }
+
+    // 計算 90 天前的時間截點 (精準算到午夜 00:00:00)
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const cutoffDate = new Date(today.getTime() - (90 * 24 * 60 * 60 * 1000));
-    const cutoffString = Utilities.formatDate(cutoffDate, ss.getSpreadsheetTimeZone() || "Asia/Taipei", "yyyy-MM-dd");
+    
+    const timeZone = ss.getSpreadsheetTimeZone() || "Asia/Taipei";
+    const cutoffString = Utilities.formatDate(cutoffDate, timeZone, "yyyy-MM-dd");
 
     const activeOrders = [headers]; // 準備存回大表的資料
     const ordersToArchive = [];     // 準備搬去封存表的資料
     
+    // 同步封存表的表頭
+    if (archiveSheet.getLastRow() === 0 || archiveSheet.getDataRange().getValues()[0].length === 0) {
+      archiveSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
+    
     // 從第 2 行開始掃描
     for (let i = 1; i < values.length; i++) {
       const row = values[i];
-      const status = row[statusColIdx];
-      const deliveryDate = row[dateColIdx]; 
-      // 確保日期格式為 YYYY-MM-DD 以便字串比對
-      const dateStr = String(deliveryDate).substring(0, 10); 
+      // 確保將狀態轉大寫並去除空白，防止手動編輯時打錯如 " deleted "
+      const status = String(row[statusColIdx] || '').trim().toUpperCase(); 
+      let deliveryDate = row[dateColIdx]; 
       
-      // 條件：超過 90 天前且狀態為 PAID (已結清)，或者狀態為 DELETED (已刪除，不論天數)
-      if ((dateStr < cutoffString && status === 'PAID') || status === 'DELETED') {
-        ordersToArchive.push(row);
+      // 【修正 3】嚴格將日期轉化為標準的 "YYYY-MM-DD" 格式進行字串比對，杜絕格式導致的誤判
+      let isOver90Days = false;
+      if (deliveryDate) {
+         let orderDate;
+         if (deliveryDate instanceof Date) {
+            orderDate = deliveryDate;
+         } else {
+            // 將所有格式轉換為安全的 V8 Date 物件解析，杜絕未補零的字串雷區
+            const safeDateStr = String(deliveryDate).replace(/-/g, '/').substring(0, 10);
+            orderDate = new Date(safeDateStr);
+         }
+         
+         if (!isNaN(orderDate.getTime())) {
+            // 直接以毫秒級的數值進行絕對大小比對，完全沒有誤差
+            isOver90Days = orderDate.getTime() < cutoffDate.getTime();
+         }
+      }
+      
+      // 【關鍵決策點】：這裡目前還是嚴格要求 status === 'PAID' (已結清) 才搬移。
+      // 若你希望「只要超過 90 天，無論是否結清一律強制歸檔」，請將下面這行改為：
+      // if (status === 'DELETED' || isOver90Days) {
+      
+      if (status === 'DELETED' || (isOver90Days && status === 'PAID')) {
+        // ★ 在推進陣列前，對這一列的所有儲存格進行「防禦性清洗」
+        const cleanRow = row.map(cell => {
+           if (cell instanceof Date) {
+              // 捕捉 Google 專屬的時間地雷 (純時間都會被判定為 1899 年)
+              if (cell.getFullYear() <= 1900) {
+                 return Utilities.formatDate(cell, timeZone, "HH:mm");
+              }
+              // 如果是正常的出貨日期，則轉為乾淨的 YYYY-MM-DD
+              return Utilities.formatDate(cell, timeZone, "yyyy-MM-dd");
+           }
+           return cell;
+        });
+
+        // 寫入清洗後的乾淨資料
+        ordersToArchive.push(cleanRow);
       } else {
-        activeOrders.push(row);
+        // 同理，寫回 Orders 大表的活躍訂單也要保持乾淨
+        const cleanRow = row.map(cell => {
+           if (cell instanceof Date) {
+              if (cell.getFullYear() <= 1900) return Utilities.formatDate(cell, timeZone, "HH:mm");
+              return Utilities.formatDate(cell, timeZone, "yyyy-MM-dd");
+           }
+           return cell;
+        });
+        
+        activeOrders.push(cleanRow);
       }
     }
     
     // 如果沒有資料需要封存，提早結束
     if (ordersToArchive.length === 0) return;
     
-    // 1. 將資料寫入封存表 (Append)
-    const archiveLastRow = archiveSheet.getLastRow();
+    // 1. 將過期與刪除的資料寫入 History_Orders 封存表 (Append，加在最後面)
+    const archiveLastRow = Math.max(1, archiveSheet.getLastRow());
     safeSetValues(archiveSheet, archiveLastRow + 1, 1, ordersToArchive);
     
-    // 2. 將主表清空並覆寫為「活躍中的訂單」
+    // 2. 清除原始訂單大表，並將保留下來的活躍訂單回寫
     orderSheet.clearContents();
     safeSetValues(orderSheet, 1, 1, activeOrders);
     
-    // (可選) 寫入系統日誌
-    try {
-      writeSystemLog("SYSTEM_ARCHIVE", "自動封存", `成功封存了 ${ordersToArchive.length} 筆歷史訂單。`);
-    } catch(e) {}
-
   } catch (err) {
-    console.error("封存腳本執行失敗: " + err.toString());
+    console.error("封存腳本發生錯誤: " + err.toString());
   } finally {
     lock.releaseLock();
   }
